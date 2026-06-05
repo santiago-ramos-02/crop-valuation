@@ -1,0 +1,14 @@
+Dado un cultivo, determina su valor para el año analizado siguiendo estas
+tres reglas según su etapa:
+
+1. ETAPA VEGETATIVA (aún no ha empezado a producir):
+   Valor = Inversión acumulada + intereses por costo de oportunidad sobre
+   esa inversión, calculados a la tasa de descuento indicada celda de tasa usada.
+
+2. EN PRODUCCIÓN, SIN ALCANZAR EL PUNTO DE EQUILIBRIO:
+   Valor = Utilidad del año analizado + monto pendiente por recuperar,
+   este último ajustado con intereses por costo de oportunidad a la misma
+   tasa de descuento.
+
+3. PUNTO DE EQUILIBRIO YA ALCANZADO:
+   Valor = Utilidad del cultivo en el año analizado.

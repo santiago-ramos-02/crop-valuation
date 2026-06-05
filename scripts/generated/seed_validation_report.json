@@ -1,0 +1,81 @@
+{
+  "counts": {
+    "agronomic_profiles": 16,
+    "cost_template_lines": 1199,
+    "crops": 10,
+    "departamentos": 33,
+    "input_cost_template_lines": 543,
+    "input_price_rows": 3164,
+    "lookup_options": 49,
+    "municipios": 1122,
+    "varieties": 16,
+    "yield_curve_points": 267
+  },
+  "known_examples": {
+    "naranja_comun_mantenimiento": {
+      "found": true,
+      "input_count": 12,
+      "input_names": [
+        "Cloruro de Potasio 0-0-60",
+        "Fosfato Diamónico (DAP) 18-46-0",
+        "Cal dolomita",
+        "Nutrifoliar Completo",
+        "Agrimins 8-5-0-6",
+        "Urea 46%",
+        "Nativo Sc",
+        "Benomyl 50 Wp",
+        "Roundup Activo",
+        "Inveprid 350 Sc",
+        "Abamectina 1,8 Ec",
+        "Analisis completo de suelos"
+      ]
+    }
+  },
+  "missing_references": {
+    "cost_template_crop_variety": [],
+    "cost_template_stages": [],
+    "price_departments": [],
+    "yield_curve_crop_variety": [],
+    "yield_curve_stages": []
+  },
+  "skipped_rows": {
+    "cost_template_rows": [],
+    "input_price_rows": [
+      771,
+      791,
+      811,
+      831,
+      851,
+      872,
+      893,
+      914,
+      935,
+      956,
+      977,
+      998,
+      1019,
+      1040,
+      1061,
+      1082,
+      1103,
+      1124,
+      1145,
+      1166,
+      1187,
+      1208,
+      1229,
+      1250,
+      1271,
+      1292,
+      1313,
+      1334,
+      1355,
+      1376,
+      1397,
+      1418,
+      1439,
+      1460
+    ],
+    "yield_curve_rows": []
+  }
+}

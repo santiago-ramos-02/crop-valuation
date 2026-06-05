@@ -1,322 +1,557 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useMemo, useState } from "react"
+import { SaveIcon } from "lucide-react"
+import type { SupabaseClient } from "@supabase/supabase-js"
+
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { Calculator, TrendingUp, AlertTriangle, CheckCircle } from "lucide-react"
-import { ValuationEngine, type ParcelData, type ParcelValuationResult } from "@/lib/calculations/valuation-engine"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  buildCropAppraisalAnnualFlowInserts,
+  buildCropAppraisalResultInsert,
+  calculateCropAppraisal,
+  type CalculatedCropAppraisal,
+} from "@/lib/appraisal/calculate-crop-appraisal"
+import { buildResolvedInsumoInserts, resolveInsumosWithContext, type ResolvedInsumosResult } from "@/lib/insumos/resolve-insumos"
+import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
-import type { Database } from "@/types/database"
+import type { Database, Json } from "@/types/database"
+import type { BlockData } from "./block-entry-form"
+import type { ParcelHeaderData } from "./parcel-header-form"
 
 interface ValuationCalculatorProps {
-  parcelData: ParcelData
-  onCalculationComplete?: (result: ParcelValuationResult) => void
+  parcelData: ParcelHeaderData
+  blockData: BlockData[]
+  existingCaseId?: string
+  onSaved?: (caseId: string) => void
 }
 
-export function ValuationCalculator({ parcelData, onCalculationComplete }: Readonly<ValuationCalculatorProps>) {
-  const [result, setResult] = useState<ParcelValuationResult | null>(null)
-  const [isCalculating, setIsCalculating] = useState(false)
-  const supabase = createClient()
+export interface SavedBlockResolution {
+  cropBlockId: string
+  appraisalResultId: string
+  block: BlockData
+  result: ResolvedInsumosResult
+  appraisal: CalculatedCropAppraisal
+}
 
-  const handleCalculate = async () => {
-    setIsCalculating(true)
+interface SaveValuationInput {
+  supabase: SupabaseClient<Database>
+  parcelData: ParcelHeaderData
+  blockData: BlockData[]
+  existingCaseId?: string
+}
 
-    // Simulate calculation delay for better UX
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+interface SaveValuationResult {
+  caseId: string
+  persistedBlocks: SavedBlockResolution[]
+}
+
+interface ValidatedBlock {
+  block: BlockData
+  ageYears: number
+  cropAreaHa: number
+  commercialPriceCopKg: number
+}
+
+const numberFormatter = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 4 })
+
+const currencyFormatter = new Intl.NumberFormat("es-CO", {
+  style: "currency",
+  currency: "COP",
+  maximumFractionDigits: 0,
+})
+
+function numberOrNull(value: string | number | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  const text = String(value).trim()
+  if (!text) return null
+  const parsed = parseLocalizedNumberInput(text)
+  return parsed === null ? null : String(parsed)
+}
+
+function optionalNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined) return null
+  const trimmed = String(value).trim()
+  if (!trimmed) return null
+  return parseLocalizedNumberInput(trimmed)
+}
+
+function textOrNull(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function formatNumber(value: number | null | undefined) {
+  if (value === null || value === undefined) return ""
+  return numberFormatter.format(value)
+}
+
+function formatCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined) return "No disponible"
+  return currencyFormatter.format(value)
+}
+
+function formatDisplayLabel(value: string | null | undefined) {
+  if (!value) return ""
+  const text = value.replaceAll('_', " ").trim().toLocaleLowerCase("es-CO")
+  return text ? text.charAt(0).toLocaleUpperCase("es-CO") + text.slice(1) : ""
+}
+
+function requiredText(value: string, message: string) {
+  const trimmed = value.trim()
+  if (!trimmed) throw new Error(message)
+  return trimmed
+}
+
+function requiredNumber(value: string, message: string) {
+  const trimmed = value.trim()
+  if (!trimmed) throw new Error(message)
+  const parsed = parseLocalizedNumberInput(trimmed)
+  if (parsed === null) throw new Error(message)
+  return parsed
+}
+
+function positiveRequiredNumber(value: string, message: string) {
+  const parsed = requiredNumber(value, message)
+  if (parsed <= 0) throw new Error(message)
+  return parsed
+}
+
+function fitosanitaryFactorFromCondition(condition: string) {
+  const normalized = condition.trim().toLocaleLowerCase("es-CO")
+  if (normalized === "buena" || normalized === "bueno") return 0.95
+  if (normalized === "aceptable") return 0.7
+  if (normalized === "regular") return 0.475
+  if (normalized === "mala" || normalized === "malo") return 0.2
+  return null
+}
+
+function blockFitosanitaryFactor(block: BlockData) {
+  return optionalNumber(block.fitosanitaryFactor) ?? fitosanitaryFactorFromCondition(block.fitosanitaryCondition)
+}
+
+function validateInputs(parcelData: ParcelHeaderData, blockData: BlockData[]) {
+  const departamentoId = requiredText(parcelData.departamentoId, "El departamento es requerido para resolver los insumos.")
+  const municipioId = requiredText(parcelData.municipioId, "El municipio es requerido.")
+  const discountRateMethod = requiredText(parcelData.discountRateMethod, "El método de tasa de descuento es requerido.")
+  const discountRateEa = requiredNumber(parcelData.discountRateEa, "La tasa de descuento es requerida para calcular el avalúo.")
+  if (discountRateEa < 0) throw new Error("La tasa de descuento debe ser mayor o igual a cero.")
+
+  if (blockData.length === 0) throw new Error("Debe registrar al menos un cultivo/lote.")
+
+  const blocks = blockData.map((block, index): ValidatedBlock => {
+    requiredText(block.blockLabel, `El nombre del cultivo/lote ${index + 1} es requerido.`)
+    requiredText(block.cropId, `El cultivo del lote ${index + 1} es requerido para resolver los insumos.`)
+    requiredText(block.varietyId, `La variedad del lote ${index + 1} es requerida para resolver los insumos.`)
+
+    const ageYears = requiredNumber(
+      block.ageYears,
+      `La edad del lote ${index + 1} es requerida para calcular la etapa y los insumos.`,
+    )
+    if (ageYears < 0) throw new Error(`La edad del lote ${index + 1} debe ser mayor o igual a cero.`)
+
+    const cropAreaHa = positiveRequiredNumber(
+      block.cropAreaHa,
+      `El área del cultivo/lote ${index + 1} es requerida y debe ser positiva.`,
+    )
+    const commercialPriceCopKg = positiveRequiredNumber(
+      block.commercialPriceCopKg,
+      `El precio de comercialización del lote ${index + 1} es requerido para calcular el avalúo.`,
+    )
+    const landRentCopHaYear = optionalNumber(block.landRentCopHaYear)
+    const soilValueCopHa = optionalNumber(block.soilValueCopHa)
+    if (landRentCopHaYear !== null && landRentCopHaYear < 0) {
+      throw new Error(`El costo de arriendo del lote ${index + 1} debe ser mayor o igual a cero.`)
+    }
+    if (soilValueCopHa !== null && soilValueCopHa < 0) {
+      throw new Error(`El valor del suelo del lote ${index + 1} debe ser mayor o igual a cero.`)
+    }
+    if ((landRentCopHaYear || 0) > 0 && (soilValueCopHa || 0) > 0) {
+      throw new Error(`Registre costo de arriendo o valor del suelo en el lote ${index + 1}, no ambos.`)
+    }
+
+    return { block, ageYears, cropAreaHa, commercialPriceCopKg }
+  })
+
+  return { departamentoId, municipioId, discountRateMethod, discountRateEa, blocks }
+}
+
+export async function saveValuation({
+  supabase,
+  parcelData,
+  blockData,
+  existingCaseId,
+}: SaveValuationInput): Promise<SaveValuationResult> {
+  const validated = validateInputs(parcelData, blockData)
+
+  const { data: userRes, error: userError } = await supabase.auth.getUser()
+  if (userError || !userRes.user) throw new Error("Debe iniciar sesión para guardar la valuación.")
+
+  const resolvedBlocks = await Promise.all(
+    validated.blocks.map(async ({ block, ageYears, cropAreaHa, commercialPriceCopKg }) => {
+      const jornalCostCop = optionalNumber(block.jornalCostCop)
+      const landRentCopHaYear = optionalNumber(block.landRentCopHaYear)
+      const result = await resolveInsumosWithContext({
+        supabase,
+        cropId: block.cropId,
+        varietyId: block.varietyId,
+        departamentoId: validated.departamentoId,
+        ageYears,
+        jornalCostCop,
+        landRentCopHaYear,
+      })
+      const densityPlantsHa =
+        optionalNumber(block.plantingDensityPlantsHa) ?? optionalNumber(result.profile.default_density_plants_ha)
+      const appraisal = await calculateCropAppraisal({
+        supabase,
+        cropId: block.cropId,
+        varietyId: block.varietyId,
+        departamentoId: validated.departamentoId,
+        currentStageId: result.stageId,
+        profile: result.profile,
+        ageYears,
+        cropAreaHa,
+        densityPlantsHa,
+        fitosanitaryFactor: blockFitosanitaryFactor(block),
+        commercialPriceCopKg,
+        freshYieldKgHa: optionalNumber(block.freshYieldKgHa),
+        jornalCostCop,
+        landRentCopHaYear,
+        discountRateMethod: validated.discountRateMethod,
+        discountRateEa: validated.discountRateEa,
+      })
+
+      return { block, ageYears, cropAreaHa, result, appraisal }
+    }),
+  )
+
+  const rawForm = { parcelData, blockData } as unknown as Json
+  let caseId = existingCaseId || ""
+
+  const casePayload = {
+    user_id: userRes.user.id,
+    case_code: parcelData.parcelId,
+    valuation_asof_date: parcelData.valuationAsOfDate,
+    departamento_id: validated.departamentoId,
+    municipio_id: validated.municipioId,
+    vereda: textOrNull(parcelData.vereda),
+    latitude: numberOrNull(parcelData.latitude),
+    longitude: numberOrNull(parcelData.longitude),
+    climate_type: textOrNull(parcelData.climateType),
+    temperature_range: textOrNull(parcelData.temperatureRange),
+    altitude_range: textOrNull(parcelData.altitudeRange),
+    aptitude_upra_sipra: textOrNull(parcelData.aptitudeUpraSipra),
+    slope_percent: numberOrNull(parcelData.slopePercent),
+    agrologic_class: textOrNull(parcelData.agrologicClass),
+    altitude_m: numberOrNull(parcelData.altitudeM),
+    total_parcel_area_ha: numberOrNull(parcelData.totalParcelAreaHa),
+    discount_rate_method: validated.discountRateMethod,
+    discount_rate_ea: String(validated.discountRateEa),
+    raw_form: rawForm,
+  }
+
+  if (existingCaseId) {
+    const { error: caseError } = await supabase.from("valuation_cases").update(casePayload).eq("id", existingCaseId)
+    if (caseError) throw caseError
+
+    const { data: oldBlocks, error: oldBlocksError } = await supabase
+      .from("crop_blocks")
+      .select("id")
+      .eq("valuation_case_id", existingCaseId)
+
+    if (oldBlocksError) throw oldBlocksError
+
+    const oldBlockIds = (oldBlocks || []).map((block) => block.id)
+    if (oldBlockIds.length > 0) {
+      const { error: linesDeleteError } = await supabase.from("resolved_insumo_lines").delete().in("crop_block_id", oldBlockIds)
+      if (linesDeleteError) throw linesDeleteError
+    }
+
+    const { error: blocksDeleteError } = await supabase.from("crop_blocks").delete().eq("valuation_case_id", existingCaseId)
+    if (blocksDeleteError) throw blocksDeleteError
+  } else {
+    const { data: createdCase, error: caseError } = await supabase
+      .from("valuation_cases")
+      .insert({
+        user_id: userRes.user.id,
+        case_code: parcelData.parcelId,
+        valuation_asof_date: parcelData.valuationAsOfDate,
+        departamento_id: validated.departamentoId,
+        municipio_id: validated.municipioId,
+        vereda: textOrNull(parcelData.vereda),
+        latitude: numberOrNull(parcelData.latitude),
+        longitude: numberOrNull(parcelData.longitude),
+        climate_type: textOrNull(parcelData.climateType),
+        temperature_range: textOrNull(parcelData.temperatureRange),
+        altitude_range: textOrNull(parcelData.altitudeRange),
+        aptitude_upra_sipra: textOrNull(parcelData.aptitudeUpraSipra),
+        slope_percent: numberOrNull(parcelData.slopePercent),
+        agrologic_class: textOrNull(parcelData.agrologicClass),
+        altitude_m: numberOrNull(parcelData.altitudeM),
+        total_parcel_area_ha: numberOrNull(parcelData.totalParcelAreaHa),
+        discount_rate_method: validated.discountRateMethod,
+        discount_rate_ea: String(validated.discountRateEa),
+        raw_form: rawForm,
+      })
+      .select("id")
+      .single()
+
+    if (caseError) throw caseError
+    caseId = createdCase.id
+  }
+
+  const persistedBlocks = await Promise.all(resolvedBlocks.map(async (resolvedBlock) => {
+    const { block, result, appraisal, ageYears, cropAreaHa } = resolvedBlock
+    const plantDistanceM = numberOrNull(block.plantDistanceM) ?? numberOrNull(result.profile.default_plant_distance_m)
+    const rowDistanceM = numberOrNull(block.rowDistanceM) ?? numberOrNull(result.profile.default_row_distance_m)
+    const plantingDensityPlantsHa =
+      numberOrNull(block.plantingDensityPlantsHa) ?? numberOrNull(result.profile.default_density_plants_ha)
+    const blockRawForm = { parcelData, block } as unknown as Json
+    const { data: createdBlock, error: blockError } = await supabase
+      .from("crop_blocks")
+      .insert({
+        valuation_case_id: caseId,
+        block_label: block.blockLabel,
+        crop_id: block.cropId,
+        variety_id: block.varietyId,
+        crop_type: textOrNull(block.cropType),
+        production_system: textOrNull(block.productionSystem),
+        age_years: String(ageYears),
+        derived_stage_id: result.stageId,
+        derived_stage_reason: result.stageReason,
+        fitosanitary_condition: textOrNull(block.fitosanitaryCondition),
+        fitosanitary_factor: blockFitosanitaryFactor(block),
+        plant_distance_m: plantDistanceM,
+        row_distance_m: rowDistanceM,
+        planting_density_plants_ha: plantingDensityPlantsHa,
+        crop_area_ha: String(cropAreaHa),
+        fresh_yield_kg_ha: numberOrNull(block.freshYieldKgHa),
+        water_availability: textOrNull(block.waterAvailability),
+        rainfall_regime: textOrNull(block.rainfallRegime),
+        annual_precipitation_mm: numberOrNull(block.annualPrecipitationMm),
+        planting_frame: textOrNull(block.plantingFrame),
+        land_rent_cop_ha_year: numberOrNull(block.landRentCopHaYear),
+        jornal_cost_cop: numberOrNull(block.jornalCostCop),
+        soil_value_cop_ha: numberOrNull(block.soilValueCopHa),
+        commercial_price_cop_kg: numberOrNull(block.commercialPriceCopKg),
+        notes: textOrNull(block.notes),
+        raw_form: blockRawForm,
+      })
+      .select("id")
+      .single()
+
+    if (blockError) throw blockError
+
+    const resolvedInserts = buildResolvedInsumoInserts(createdBlock.id, result.lines)
+    if (resolvedInserts.length > 0) {
+      const { error: linesError } = await supabase.from("resolved_insumo_lines").insert(resolvedInserts)
+      if (linesError) throw linesError
+    }
+
+    const { data: createdAppraisal, error: appraisalError } = await supabase
+      .from("crop_appraisal_results")
+      .insert(buildCropAppraisalResultInsert(createdBlock.id, appraisal))
+      .select("id")
+      .single()
+
+    if (appraisalError) throw appraisalError
+
+    const flowInserts = buildCropAppraisalAnnualFlowInserts(createdAppraisal.id, createdBlock.id, appraisal.annualFlows)
+    if (flowInserts.length > 0) {
+      const { error: flowError } = await supabase.from("crop_appraisal_annual_flows").insert(flowInserts)
+      if (flowError) throw flowError
+    }
+
+    return {
+      cropBlockId: createdBlock.id,
+      appraisalResultId: createdAppraisal.id,
+      block,
+      result,
+      appraisal,
+    }
+  }))
+
+  return { caseId, persistedBlocks }
+}
+
+export function ValuationResultTables({ savedBlocks }: Readonly<{ savedBlocks: SavedBlockResolution[] }>) {
+  if (savedBlocks.length === 0) return null
+  const totalAppraisedValue = savedBlocks.reduce((sum, block) => sum + block.appraisal.appraisedValueCop, 0)
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Avalúo final del predio</CardTitle>
+          <CardDescription>Valor consolidado de los cultivos registrados</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="text-3xl font-semibold text-emerald-700">{formatCurrency(totalAppraisedValue)}</div>
+        </CardContent>
+      </Card>
+
+      {savedBlocks.map(({ cropBlockId, block, result, appraisal }) => (
+        <Card key={cropBlockId}>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle>{block.blockLabel}</CardTitle>
+                <CardDescription>Resultado del cultivo registrado</CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary">Etapa: {result.stageName}</Badge>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="rounded-md border bg-white px-4 py-3">
+                <div className="text-xs text-muted-foreground">Valor del cultivo</div>
+                <div className="text-lg font-semibold text-emerald-700">{formatCurrency(appraisal.appraisedValueCop)}</div>
+              </div>
+              <div className="rounded-md border bg-white px-4 py-3">
+                <div className="text-xs text-muted-foreground">Valor por hectárea</div>
+                <div className="text-lg font-semibold">{formatCurrency(appraisal.appraisedValueCopHa)}</div>
+              </div>
+              <div className="rounded-md border bg-white px-4 py-3">
+                <div className="text-xs text-muted-foreground">Valor por planta</div>
+                <div className="text-lg font-semibold">{formatCurrency(appraisal.appraisedValueCopPerPlant)}</div>
+              </div>
+              <div className="rounded-md border bg-white px-4 py-3">
+                <div className="text-xs text-muted-foreground">Área valorada</div>
+                <div className="text-lg font-semibold">{formatNumber(appraisal.cropAreaHa)} ha</div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 text-sm md:grid-cols-5">
+              <div>
+                <span className="font-medium">Rendimiento del año:</span> {formatNumber(appraisal.currentYearYieldKgHa)} kg/ha
+              </div>
+              <div>
+                <span className="font-medium">Ingreso del año:</span> {formatCurrency(appraisal.currentYearRevenueCopHa)}
+              </div>
+              <div>
+                <span className="font-medium">Costo del año:</span> {formatCurrency(appraisal.currentYearCostCopHa)}
+              </div>
+              <div>
+                <span className="font-medium">Utilidad del año:</span> {formatCurrency(appraisal.currentYearUtilityCopHa)}
+              </div>
+              <div>
+                <span className="font-medium">Pendiente por recuperar:</span> {formatCurrency(appraisal.pendingRecoveryCopHa)}
+              </div>
+            </div>
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Rubro</TableHead>
+                  <TableHead>Servicio o insumo</TableHead>
+                  <TableHead>Actividad</TableHead>
+                  <TableHead>Presentación</TableHead>
+                  <TableHead className="text-right">Cantidad</TableHead>
+                  <TableHead className="text-right">Precio unitario (COP)</TableHead>
+                  <TableHead className="text-right">Total (COP)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {result.lines.map((line) => (
+                  <TableRow key={line.templateLineId}>
+                    <TableCell>{line.rubroName}</TableCell>
+                    <TableCell className="font-medium">{line.inputName}</TableCell>
+                    <TableCell>{formatDisplayLabel(line.activityName)}</TableCell>
+                    <TableCell>{line.presentation}</TableCell>
+                    <TableCell className="text-right">{formatNumber(line.quantity)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(line.unitPriceCop)}</TableCell>
+                    <TableCell className="text-right font-medium">{formatCurrency(line.totalCop)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+              <TableFooter>
+                <TableRow>
+                  <TableCell colSpan={6}>Total</TableCell>
+                  <TableCell className="text-right">{formatCurrency(result.totalCop)}</TableCell>
+                </TableRow>
+              </TableFooter>
+            </Table>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+export function ValuationCalculator({ parcelData, blockData, existingCaseId, onSaved }: Readonly<ValuationCalculatorProps>) {
+  const supabase = useMemo(() => createClient(), [])
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [savedCaseId, setSavedCaseId] = useState<string | null>(null)
+  const [savedBlocks, setSavedBlocks] = useState<SavedBlockResolution[]>([])
+
+  const handleSubmit = useCallback(async () => {
+    setError(null)
+    setIsSaving(true)
 
     try {
-      const curveIds = Array.from(
-        new Set(
-          parcelData.blocks
-            .filter((b) => b.yield_source === "modeled" && b.age_yield_curve_id)
-            .map((b) => b.age_yield_curve_id as string),
-        ),
-      )
-      const templateIds = Array.from(
-        new Set(
-          parcelData.blocks
-            .filter((b) => b.cost_source === "standard_template" && b.cost_template_id)
-            .map((b) => b.cost_template_id as string),
-        ),
-      )
-      const cropIds = Array.from(
-        new Set(
-          parcelData.blocks
-            .map((b) => b.crop)
-            .filter((c): c is string => Boolean(c)),
-        ),
-      )
-
-      let yieldCurves: Record<string, Record<number, number>> = {}
-      if (curveIds.length > 0) {
-        const { data } = await supabase
-          .from("age_yield_curves")
-          .select("id,curve_data")
-          .in("id", curveIds)
-          .returns<Pick<Database["public"]["Tables"]["age_yield_curves"]["Row"], "id" | "curve_data">[]>()
-        for (const row of data || []) {
-          const obj = row.curve_data as Record<string, number>
-          const normalized: Record<number, number> = {}
-          Object.entries(obj).forEach(([k, v]) => {
-            const n = Number(k)
-            if (!Number.isNaN(n)) normalized[n] = Number(v)
-          })
-          yieldCurves[row.id] = normalized
-        }
-      }
-
-      let costTemplates: Record<string, Record<string, number>> = {}
-      if (templateIds.length > 0) {
-        const { data } = await supabase
-          .from("cost_templates")
-          .select("*")
-          .in("id", templateIds)
-          .returns<Database["public"]["Tables"]["cost_templates"]["Row"][]>()
-        for (const row of data || []) {
-          costTemplates[row.id] = {
-            land_rent_cop_per_ha: Number(row.land_rent_cop_per_ha || 0),
-            fertilizers_cop_per_ha: Number(row.fertilizers_cop_per_ha || 0),
-            crop_protection_cop_per_ha: Number(row.crop_protection_cop_per_ha || 0),
-            propagation_material_cop_per_ha: Number(row.propagation_material_cop_per_ha || 0),
-            labor_cop_per_ha: Number(row.labor_cop_per_ha || 0),
-            irrigation_energy_cop_per_ha: Number(row.irrigation_energy_cop_per_ha || 0),
-            maintenance_upkeep_cop_per_ha: Number(row.maintenance_upkeep_cop_per_ha || 0),
-            harvest_cop_per_ha: Number(row.harvest_cop_per_ha || 0),
-            transport_logistics_cop_per_ha: Number(row.transport_logistics_cop_per_ha || 0),
-            services_contracts_cop_per_ha: Number(row.services_contracts_cop_per_ha || 0),
-            admin_overheads_cop_per_ha: Number(row.admin_overheads_cop_per_ha || 0),
-          }
-        }
-      }
-
-      // Fetch cost_curves for the crops in the parcel (to let engine pick age-based costs)
-      let costCurves: Record<string, Record<number, number>> = {}
-      if (cropIds.length > 0) {
-        const { data } = await supabase
-          .from("cost_curves")
-          .select("id,crop_id,name,curve_data")
-          .in("crop_id", cropIds)
-          .returns<Pick<Database["public"]["Tables"]["cost_curves"]["Row"], "id" | "crop_id" | "name" | "curve_data">[]>()
-        const rows = data || []
-        for (const row of rows) {
-          const obj = row.curve_data as Record<string, number>
-          const normalized: Record<number, number> = {}
-          Object.entries(obj).forEach(([k, v]) => {
-            const n = Number(k)
-            if (!Number.isNaN(n)) normalized[n] = Number(v)
-          })
-          costCurves[row.id] = normalized
-        }
-        // Alias: if a crop has a single cost curve, allow lookup by the age_yield_curve_id directly
-        const byCrop: Record<string, string[]> = {}
-        for (const r of rows) {
-          byCrop[r.crop_id] = byCrop[r.crop_id] || []
-          byCrop[r.crop_id].push(r.id)
-        }
-        for (const b of parcelData.blocks) {
-          const crop = b.crop
-          const ageId = b.age_yield_curve_id
-          if (!crop || !ageId) continue
-          const list = byCrop[crop] || []
-          if (list.length === 1) {
-            const onlyCurveId = list[0]
-            if (costCurves[onlyCurveId] && !costCurves[ageId]) {
-              costCurves[ageId] = costCurves[onlyCurveId]
-            }
-          }
-        }
-      }
-
-      const calculationResult = ValuationEngine.calculateParcelValuation(parcelData, {
-        yieldCurves,
-        costTemplates,
-        costCurves,
-      })
-      setResult(calculationResult)
-      onCalculationComplete?.(calculationResult)
-    } catch (error) {
-      console.error("Error de cálculo:", error)
+      const result = await saveValuation({ supabase, parcelData, blockData, existingCaseId })
+      setSavedCaseId(result.caseId)
+      setSavedBlocks(result.persistedBlocks)
+      onSaved?.(result.caseId)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo guardar la valuación.")
     } finally {
-      setIsCalculating(false)
+      setIsSaving(false)
     }
-  }
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("es-CO", {
-      style: "currency",
-      currency: "COP",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount)
-  }
-
-  const getTierColor = (tier: "A" | "B" | "C") => {
-    switch (tier) {
-      case "A":
-        return "bg-emerald-100 text-emerald-800 border-emerald-200"
-      case "B":
-        return "bg-amber-100 text-amber-800 border-amber-200"
-      case "C":
-        return "bg-red-100 text-red-800 border-red-200"
-    }
-  }
-
-  const getTierIcon = (tier: "A" | "B" | "C") => {
-    switch (tier) {
-      case "A":
-        return <CheckCircle className="h-4 w-4" />
-      case "B":
-        return <TrendingUp className="h-4 w-4" />
-      case "C":
-        return <AlertTriangle className="h-4 w-4" />
-    }
-  }
+  }, [blockData, existingCaseId, onSaved, parcelData, supabase])
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Calculator className="h-5 w-5 text-emerald-600" />
-            Calculadora de VPN
+            <SaveIcon className="h-5 w-5 text-emerald-600" />
+            Resultado de Valuación
           </CardTitle>
-          <CardDescription>Calcular el VPN agrícola para el predio {parcelData.parcel_id}</CardDescription>
+          <CardDescription>
+            Guardar la valuación del predio {parcelData.parcelId} y presentar el avalúo final.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="font-medium">ID de Predio:</span> {parcelData.parcel_id}
-              </div>
-              <div>
-                <span className="font-medium">Ubicación:</span> {parcelData.region}
-              </div>
-              <div>
-                <span className="font-medium">Área Total:</span> {parcelData.total_parcel_area_ha} ha
-              </div>
-              <div>
-                <span className="font-medium">Cultivos/Lotes:</span> {parcelData.blocks.length}
-              </div>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <span className="font-medium">Predio:</span> {parcelData.parcelId}
             </div>
-
-            <Button onClick={handleCalculate} disabled={isCalculating} className="w-full">
-              {isCalculating ? "Calculando..." : "Calcular VPN"}
-            </Button>
+            {parcelData.totalParcelAreaHa ? (
+              <div>
+                <span className="font-medium">Área total:</span> {parcelData.totalParcelAreaHa} ha
+              </div>
+            ) : null}
+            <div>
+              <span className="font-medium">Cultivos/Lotes:</span> {blockData.length}
+            </div>
+            <div>
+              <span className="font-medium">Fecha:</span> {parcelData.valuationAsOfDate}
+            </div>
           </div>
+
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
+          ) : null}
+
+          <Button onClick={handleSubmit} disabled={isSaving || Boolean(savedCaseId)} className="w-full">
+            {isSaving
+              ? "Guardando..."
+              : savedCaseId
+                ? "Valuación guardada"
+                : existingCaseId
+                  ? "Actualizar y presentar resultado"
+                  : "Guardar y presentar resultado"}
+          </Button>
         </CardContent>
       </Card>
 
-      {result && (
-        <div className="space-y-6">
-          {/* Summary Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                Resumen de VPN
-                <Badge className={getTierColor(result.overall_tier)}>
-                  {getTierIcon(result.overall_tier)}
-                  Nivel {result.overall_tier}
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <div className="text-2xl font-bold text-emerald-600">{formatCurrency(result.parcel_value_cop)}</div>
-                  <div className="text-sm text-muted-foreground">VPN Total de la Parcela</div>
-                </div>
-                <div className="space-y-2">
-                  <div className="text-2xl font-bold text-emerald-600">
-                    {formatCurrency(result.parcel_value_cop_per_ha)}
-                  </div>
-                  <div className="text-sm text-muted-foreground">VPN por Hectárea</div>
-                </div>
-              </div>
-
-              {result.summary_flags.length > 0 && (
-                <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                  <div className="flex items-center gap-2 text-amber-800 font-medium mb-2">
-                    <AlertTriangle className="h-4 w-4" />
-                    Indicadores de Control de Calidad
-                  </div>
-                  <ul className="text-sm text-amber-700 space-y-1">
-                    {result.summary_flags.map((flag, index) => (
-                      <li key={index}>• {flag}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Block Details */}
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold">Análisis por Cultivo/Lote</h3>
-            {result.blocks.map((block, index) => (
-              <Card key={block.block_id}>
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between text-base">
-                    Cultivo/Lote {block.block_id}
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline">
-                        {block.phase} • {block.pe_flag}
-                      </Badge>
-                      <Badge className={getTierColor(block.tier)}>
-                        {getTierIcon(block.tier)}
-                        Nivel {block.tier}
-                      </Badge>
-                    </div>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                    <div>
-                      <div className="text-sm font-medium">Edad</div>
-                      <div className="text-lg">{block.age_years_t} años</div>
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium">Rendimiento</div>
-                      <div className="text-lg">{block.yield_t_ha.toLocaleString()} kg/ha</div>
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium">Ingreso Neto</div>
-                      <div className="text-lg">{formatCurrency(block.net_income_cop)}</div>
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium">VPN del Cultivo/Lote</div>
-                      <div className="text-lg font-bold text-emerald-600">{formatCurrency(block.value_block_cop)}</div>
-                    </div>
-                  </div>
-
-                  <Separator className="my-4" />
-
-                  <details className="space-y-2">
-                    <summary className="cursor-pointer font-medium text-sm">Ver Pasos de Cálculo</summary>
-                    <div className="text-xs text-muted-foreground space-y-1 ml-4">
-                      {block.calculation_steps.map((step, stepIndex) => (
-                        <div key={stepIndex}>• {step}</div>
-                      ))}
-                    </div>
-                  </details>
-
-                  {block.qa_flags.length > 0 && (
-                    <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs">
-                      <div className="font-medium text-amber-800 mb-1">Indicadores de Calidad:</div>
-                      {block.qa_flags.map((flag, flagIndex) => (
-                        <div key={flagIndex} className="text-amber-700">
-                          • {flag}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+      <ValuationResultTables savedBlocks={savedBlocks} />
     </div>
   )
 }

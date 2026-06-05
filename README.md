@@ -1,103 +1,87 @@
-# Plataforma de Valuacion Agricola
+# Plataforma de Avaluos Agricolas
 
-## Descripcion General
-Crop Valuation es una aplicacion web interna para preparar valuaciones profesionales de predios agricolas. Acompana a los analistas desde la configuracion del predio, la captura de datos por cultivo/lote y la ejecucion del motor de valuacion que estima indicadores de flujo de caja y asigna niveles de confianza.
+Aplicacion web interna para registrar predios agricolas, capturar cultivos/lotes y calcular el avaluo final del cultivo con reglas derivadas de los libros de Excel y del arbol de decision del liquidador.
 
-## Caracteristicas Principales
-- Flujo guiado que lleva al usuario por el encabezado del predio, los datos por cultivo/lote y una revision del calculo antes de guardar resultados.
-- Motor de valuacion embebido (`lib/calculations/valuation-engine.ts`) que calcula valores de cultivo/lote, aproximaciones de VPN predial, estado de punto de equilibrio y banderas de control de calidad.
-- Persistencia en Supabase para predios, cultivos/lotes, resultados de valuacion, tablas de referencia y autenticacion gestionada a traves del proyecto institucional.
-- Paginas de panel, visualizacion y edicion bajo `app/valuation/*` para revisar valuaciones historicas y actualizar predios existentes.
-- Interfaz en espanol alineada con el proceso institucional de avaluos y respaldada por la metodologia detallada en `AVM_formulas_y_procedimiento.md`.
+## Stack
 
-## Stack Tecnologico
-- Next.js 15 App Router con React 19 y componentes server/client.
-- TypeScript en toda la aplicacion con tipos compartidos en `types/`.
-- Tailwind CSS v4 y componentes shadcn/ui (Radix UI, iconos Lucide).
-- Supabase Postgres, Auth y Storage via `@supabase/supabase-js` y los helpers SSR/browser en `lib/supabase/`.
+- Next.js 16 App Router, React 19 y TypeScript.
+- Tailwind CSS v4 con componentes shadcn/ui.
+- Supabase Postgres y Auth.
+- Semillas generadas desde `20260603Aplicativo.xlsx`.
+
+## Flujo Principal
+
+1. Capturar encabezado del predio: departamento, municipio, condicion agroecologica y tasa de descuento.
+2. Capturar cada cultivo/lote: cultivo, variedad, edad, area, condicion fitosanitaria, jornal, arriendo y precio comercial.
+3. Resolver etapa productiva e insumos desde los catalogos importados de Excel.
+4. Calcular el avaluo final del cultivo:
+   - etapa vegetativa: inversion acumulada mas costo de oportunidad;
+   - produccion antes de equilibrio: utilidad del ano mas recuperacion pendiente;
+   - equilibrio alcanzado: utilidad del ano.
+5. Guardar el caso, los lotes, el resultado de avaluo y los flujos anuales en Supabase.
+
+## Modulos Relevantes
+
+| Ruta | Proposito |
+| --- | --- |
+| `app/valuation/new/page.tsx` | Flujo guiado para crear una valuacion. |
+| `components/parcel-header-form.tsx` | Captura del predio y tasa de descuento. |
+| `components/block-entry-form.tsx` | Captura de cultivos/lotes. |
+| `components/valuation-calculator.tsx` | Persistencia del caso, insumos resueltos y avaluo final. |
+| `lib/insumos/resolve-insumos.ts` | Resolucion de insumos por cultivo, variedad, etapa y departamento. |
+| `lib/appraisal/calculate-crop-appraisal.ts` | Calculo del avaluo final y flujos anuales. |
+| `scripts/import_excel_seed_data.py` | Generador de SQL seed desde el Excel vigente. |
+| `supabase/migrations/20260531000000_reset_insumos_schema.sql` | Reset completo del esquema publico de la app. |
+| `supabase/seed.sql` | Seed consolidado generado desde `scripts/generated/*.sql`. |
 
 ## Puesta en Marcha
-### Requisitos Previos
-- Node.js 20.x o superior (alineado con la version usada en CI/CD).
-- pnpm 9.x (el proyecto gestiona dependencias con `pnpm-lock.yaml`).
-- Acceso al proyecto institucional de Supabase (URL, anon key, service role key y cadenas de conexion de base de datos).
 
-### Variables de Entorno
-Cree un archivo `.env.local` en la raiz del proyecto. Coordine con los administradores antes de copiar secretos. La aplicacion espera las siguientes variables:
+Instalar dependencias:
 
-| Variable | Requerida | Descripcion |
-| --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | si | URL publica del proyecto Supabase. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | si | Llave anonima publica para uso en el cliente. |
-| `NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL` | opcional | URL de redireccion para confirmaciones de correo en desarrollo. |
-| `SUPABASE_URL` | si | URL de Supabase usada en el servidor por rutas y middleware. |
-| `SUPABASE_SERVICE_ROLE_KEY` | si (tareas server) | Llave de rol de servicio para tareas en background o migraciones. Nunca exponer en el navegador. |
-| `POSTGRES_URL` | si | Cadena de conexion Postgres con pool. |
-| `POSTGRES_URL_NON_POOLING` | opcional | Cadena sin PgBouncer para scripts administrativos. |
-| `POSTGRES_PRISMA_URL` | opcional | Cadena compatible con clientes estilo Prisma si se requiere. |
-| `POSTGRES_HOST` | opcional | Host usado por scripts de monitoreo. |
-
-### Instalar Dependencias
 ```bash
 pnpm install
 ```
 
-### Ejecutar en Local
+Ejecutar en local:
+
 ```bash
 pnpm dev
 ```
-La aplicacion inicia por defecto en http://localhost:3000. Inicie sesion o registre un usuario de Supabase con acceso al proyecto institucional.
 
-### Scripts Adicionales
+La aplicacion inicia por defecto en `http://localhost:3000`.
+
+## Base de Datos
+
+Este proyecto es nuevo, asi que el esquema se maneja como reset completo.
+
+1. Aplicar `supabase/migrations/20260531000000_reset_insumos_schema.sql`.
+2. Aplicar `supabase/seed.sql`.
+
+Para regenerar el seed desde el Excel vigente:
+
 ```bash
-pnpm build   # Compilacion para produccion
-pnpm start   # Ejecuta el servidor de produccion luego de compilar
-pnpm lint    # Analisis estatico via next lint
+python scripts/import_excel_seed_data.py
 ```
 
-## Base de Datos y Migraciones
-El esquema de Supabase se encuentra en el directorio `scripts/`. Ejecute los archivos SQL en orden numerico al preparar un nuevo entorno:
+El generador actualiza `scripts/generated/*.sql` y `scripts/generated/seed_validation_report.json`. Despues de regenerar, reconstruya `supabase/seed.sql` concatenando los archivos generados en orden.
 
-1. `001_create_parcels_table.sql` (includes departamento and municipio columns)
-2. `002_create_blocks_table.sql`
-3. `003_create_lookup_tables.sql` (includes departamentos and municipios tables)
-4. `004_create_valuation_results_table.sql`
-5. `005_create_functions_and_triggers.sql`
-6. `006_seed_default_curves_and_templates.sql`
-7. `007_seed_departamentos_municipios.sql` (seed departamentos and municipios data)
+## Validacion
 
-Apliquelos mediante el editor SQL de Supabase o `psql`:
+Ejecutar antes de entregar cambios:
+
 ```bash
-psql "$POSTGRES_URL_NON_POOLING" -f scripts/001_create_parcels_table.sql
-```
-Repita para los demas scripts. Mantenga `types/database.ts` sincronizado con cualquier cambio de esquema.
-
-## Estructura del Proyecto
-```
-app/                    Rutas y paginas de Next.js (App Router)
-components/             Componentes reutilizables incluyendo formularios de parcela y cultivo/lote
-hooks/                  Hooks personalizados usados en formularios y asistentes
-lib/                    Clientes de Supabase y logica del motor de valuacion
-public/                 Activos estaticos servidos por Next.js
-scripts/                Migraciones SQL y datos seed para Supabase
-styles/                 Configuracion de Tailwind y estilos globales
-types/                  Definiciones TypeScript compartidas generadas desde SQL
+pnpm lint
+pnpm build
 ```
 
-## Flujo de Valuacion
-1. Capturar informacion a nivel predio (departamento, municipio, operador, fecha de valuacion, area).
-2. Configurar cada cultivo/lote con cultivo, variedad, edad, fuente de rendimiento, precios y supuestos de costos.
-3. Ejecutar el valuador para obtener curvas de referencia, calcular metricas de cultivo/lote y asignar niveles de confianza.
-4. Persistir predios, cultivos/lotes y resultados en Supabase para su posterior revision.
-5. Revisar paneles y paginas de detalle para seguir historicos y preparar reportes para clientes.
+TypeScript se puede validar con:
 
-## Documentacion y Referencias
-- `AVM_formulas_y_procedimiento.md` y el PDF asociado documentan la logica financiera y deben mantenerse alineados con cualquier cambio en el motor.
-- El middleware de Supabase en `lib/supabase/middleware.ts` administra sesiones autenticadas en componentes de servidor.
-- Los componentes de UI siguen la identidad institucional definida en `styles/` y la tematizacion de shadcn/ui.
+```bash
+./node_modules/.bin/tsc --noEmit
+```
 
-## Lista de Verificacion de Mantenimiento
-- Ejecute `pnpm lint` antes de abrir pull requests.
-- Valide que `.env.local` coincida con las credenciales almacenadas en el gestor de secretos institucional antes de desplegar.
-- Actualice `types/database.ts` cada vez que cambien los scripts SQL para evitar desviaciones en tiempo de ejecucion.
-- Registre las migraciones en el sistema interno de seguimiento junto con las actualizaciones documentales.
+## Documentos Fuente
+
+- `20260603Aplicativo.xlsx`: workbook vigente para semillas y reglas de calculo.
+- `arbol de desición.jpg`: arbol de decision del liquidador.
+- `instrucciones liquidador de cultivo.txt`: reglas textuales del avaluo.

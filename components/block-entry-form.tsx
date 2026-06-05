@@ -1,1478 +1,705 @@
 "use client"
 
 import type React from "react"
-import { createClient } from "@/lib/supabase/client"
-import type { Database } from "@/types/database"
-import { useState, useEffect, useMemo } from "react"
+
+import { useEffect, useMemo, useState } from "react"
+import { PlusIcon, SproutIcon, Trash2 } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { NumericInput } from "@/components/ui/numeric-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Separator } from "@/components/ui/separator"
-import { Badge } from "@/components/ui/badge"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { TrendingUpIcon, DollarSignIcon, CalculatorIcon, FileTextIcon, PlusIcon, InfoIcon, Trash2 } from "lucide-react"
-import { CreatableCombobox } from "@/components/creatable-combobox"
+import { parseLocalizedNumberInput } from "@/lib/number-notation"
+import { createClient } from "@/lib/supabase/client"
+import type { Database } from "@/types/database"
 
-type AgeYieldCurveRow = Database["public"]["Tables"]["age_yield_curves"]["Row"]
+type Crop = Database["public"]["Tables"]["crops"]["Row"]
+type Variety = Database["public"]["Tables"]["varieties"]["Row"]
+type LookupOption = Database["public"]["Tables"]["lookup_options"]["Row"]
+type AgronomicProfile = Database["public"]["Tables"]["crop_variety_agronomic_profiles"]["Row"]
 
-interface BlockData {
-  // Block identity
-  blockId: string
-  blockAreaHa: string
-  crop: string
-  variety: string
-  plantingDate: string
-  densitySpacing: string
-
-  // Yield source
-  yieldSource: "measured" | "modeled" | ""
-  // Measured yield fields
-  productionTonsPeriod: string
-  periodDays: string
-  evidenceUploads: string[]
-  // Modeled yield fields
-  ageYieldCurveId: string
-  realizationFactor: string
-
-  // Price
-  priceFarmgateCopPerKg: string
-  priceSourceNote: string
-
-  // Costs
-  costSource: "standard_template" | "custom_entered" | ""
-  costTemplateId: string
-  // Custom cost fields (COP per hectare)
-  landRentCopPerHa: string
-  fertilizersCopPerHa: string
-  cropProtectionCopPerHa: string
-  propagationMaterialCopPerHa: string
-  laborCopPerHa: string
-  irrigationEnergyCopPerHa: string
-  maintenanceUpkeepCopPerHa: string
-  harvestCopPerHa: string
-  transportLogisticsCopPerHa: string
-  servicesContractsCopPerHa: string
-  adminOverheadsCopPerHa: string
-
-  // Financial
-  financedAmountCop: string
-  eaRate: string
-
-  // Improductive phase parameters
-  cumulativeOutlaysToDateCop: string
-  inpFactor: string
-  improductiveYears: string
-
-  // Discount & metadata
-  dnpDiscountRate: string
+export interface BlockData {
+  blockLabel: string
+  cropId: string
+  varietyId: string
+  cropType: string
+  productionSystem: string
+  ageYears: string
+  fitosanitaryCondition: string
+  fitosanitaryFactor: string
+  plantDistanceM: string
+  rowDistanceM: string
+  plantingDensityPlantsHa: string
+  cropAreaHa: string
+  freshYieldKgHa: string
+  waterAvailability: string
+  rainfallRegime: string
+  annualPrecipitationMm: string
+  plantingFrame: string
+  landRentCopHaYear: string
+  jornalCostCop: string
+  soilValueCopHa: string
+  commercialPriceCopKg: string
   notes: string
-}
-
-const customCostFieldDefinitions: Array<{
-  key: keyof BlockData
-  label: string
-  tooltip: string
-}> = [
-  {
-    key: "landRentCopPerHa",
-    label: "Arriendo de Tierra",
-    tooltip: "Costo anual de arriendo o uso de la tierra",
-  },
-  {
-    key: "fertilizersCopPerHa",
-    label: "Fertilizantes",
-    tooltip: "Costo de fertilizantes químicos y orgánicos",
-  },
-  {
-    key: "cropProtectionCopPerHa",
-    label: "Protección de Cultivos",
-    tooltip: "Pesticidas, fungicidas, herbicidas",
-  },
-  {
-    key: "propagationMaterialCopPerHa",
-    label: "Material de Propagación",
-    tooltip: "Semillas, plántulas, material vegetal",
-  },
-  {
-    key: "laborCopPerHa",
-    label: "Mano de Obra",
-    tooltip: "Costos de trabajo directo en el cultivo",
-  },
-  {
-    key: "irrigationEnergyCopPerHa",
-    label: "Riego/Energía",
-    tooltip: "Costos de riego y energía eléctrica",
-  },
-  {
-    key: "maintenanceUpkeepCopPerHa",
-    label: "Mantenimiento",
-    tooltip: "Mantenimiento de equipos e infraestructura",
-  },
-  {
-    key: "harvestCopPerHa",
-    label: "Cosecha",
-    tooltip: "Costos de recolección y procesamiento inicial",
-  },
-  {
-    key: "transportLogisticsCopPerHa",
-    label: "Transporte/Logística",
-    tooltip: "Transporte del producto al punto de venta",
-  },
-  {
-    key: "servicesContractsCopPerHa",
-    label: "Servicios/Contratos",
-    tooltip: "Servicios técnicos y contratos externos",
-  },
-  {
-    key: "adminOverheadsCopPerHa",
-    label: "Gastos Administrativos",
-    tooltip: "Costos administrativos y generales",
-  },
-]
-
-interface BlockErrors {
-  blockId?: string
-  blockAreaHa?: string
-  crop?: string
-  plantingDate?: string
-  yieldSource?: string
-  priceFarmgateCopPerKg?: string
-  costSource?: string
-  productionTonsPeriod?: string
-  periodDays?: string
-  ageYieldCurveId?: string
-  costTemplateId?: string
-  improductiveYears?: string
 }
 
 interface BlockEntryFormProps {
   onSubmit: (blocks: BlockData[]) => void
+  onChange?: (blocks: BlockData[]) => void
   initialBlocks?: BlockData[]
   isLoading?: boolean
   totalParcelAreaHa?: number
-  parcelId?: string // Added parcelId to fetch blocks for specific parcel
-  regionId?: string
+  submitLabel?: string
 }
 
-const createEmptyBlock = (): BlockData => ({
-  blockId: "",
-  blockAreaHa: "",
-  crop: "",
-  variety: "",
-  plantingDate: "",
-  densitySpacing: "",
-  yieldSource: "",
-  productionTonsPeriod: "",
-  periodDays: "365",
-  evidenceUploads: [],
-  ageYieldCurveId: "",
-  realizationFactor: "1.00",
-  priceFarmgateCopPerKg: "",
-  priceSourceNote: "",
-  costSource: "",
-  costTemplateId: "",
-  landRentCopPerHa: "0",
-  fertilizersCopPerHa: "0",
-  cropProtectionCopPerHa: "0",
-  propagationMaterialCopPerHa: "0",
-  laborCopPerHa: "0",
-  irrigationEnergyCopPerHa: "0",
-  maintenanceUpkeepCopPerHa: "0",
-  harvestCopPerHa: "0",
-  transportLogisticsCopPerHa: "0",
-  servicesContractsCopPerHa: "0",
-  adminOverheadsCopPerHa: "0",
-  financedAmountCop: "0",
-  eaRate: "0.12",
-  cumulativeOutlaysToDateCop: "",
-  inpFactor: "0.40",
-  improductiveYears: "",
-  dnpDiscountRate: "0.12",
+type BlockErrors = Partial<Record<keyof BlockData, string>>
+
+const numberFormatter = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 4 })
+
+const createEmptyBlock = (index = 0): BlockData => ({
+  blockLabel: `Lote ${index + 1}`,
+  cropId: "",
+  varietyId: "",
+  cropType: "",
+  productionSystem: "",
+  ageYears: "",
+  fitosanitaryCondition: "",
+  fitosanitaryFactor: "",
+  plantDistanceM: "",
+  rowDistanceM: "",
+  plantingDensityPlantsHa: "",
+  cropAreaHa: "",
+  freshYieldKgHa: "",
+  waterAvailability: "",
+  rainfallRegime: "",
+  annualPrecipitationMm: "",
+  plantingFrame: "",
+  landRentCopHaYear: "",
+  jornalCostCop: "",
+  soilValueCopHa: "",
+  commercialPriceCopKg: "",
   notes: "",
 })
 
+function optionGroups(options: LookupOption[]) {
+  return options.reduce<Record<string, LookupOption[]>>((groups, option) => {
+    groups[option.group_key] = groups[option.group_key] || []
+    groups[option.group_key].push(option)
+    return groups
+  }, {})
+}
+
+function SelectField({
+  id,
+  value,
+  onChange,
+  options,
+  placeholder,
+  className,
+  disabled,
+  required,
+  invalid,
+}: Readonly<{
+  id: string
+  value: string
+  onChange: (value: string) => void
+  options: Array<{ value: string; label: string }>
+  placeholder: string
+  className?: string
+  disabled?: boolean
+  required?: boolean
+  invalid?: boolean
+}>) {
+  return (
+    <Select value={value} onValueChange={onChange} disabled={disabled}>
+      <SelectTrigger
+        id={id}
+        aria-required={required || undefined}
+        aria-invalid={invalid || undefined}
+        className={`w-full ${className || ""}`}
+      >
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function toNumber(value: string) {
+  return parseLocalizedNumberInput(value)
+}
+
+function hasPositiveValue(value: string) {
+  const parsed = toNumber(value)
+  return parsed !== null && parsed > 0
+}
+
+function valueText(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return ""
+  return String(value)
+}
+
+function formatMeasurement(value: string | number | null | undefined, suffix = "") {
+  const parsed = parseLocalizedNumberInput(value)
+  if (parsed === null) return "No disponible"
+  return `${numberFormatter.format(parsed)}${suffix}`
+}
+
+function normalizedOption(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLocaleLowerCase("es-CO")
+}
+
+function densityFromSpacing(rowDistanceM: string, plantDistanceM: string, plantingFrame: string) {
+  const rowDistance = toNumber(rowDistanceM)
+  const plantDistance = toNumber(plantDistanceM)
+  if (rowDistance === null || plantDistance === null || rowDistance <= 0 || plantDistance <= 0) return null
+
+  const normalizedFrame = normalizedOption(plantingFrame)
+  if (normalizedFrame === "tres bolillo") return Math.round(10000 / (rowDistance * plantDistance * 0.866))
+  if (normalizedFrame === "cuadro") return Math.round(10000 / (rowDistance * plantDistance))
+  return null
+}
+
+function fitosanitaryFactorFor(condition: string) {
+  const normalized = condition.trim().toLocaleLowerCase("es-CO")
+  if (normalized === "buena" || normalized === "bueno") return "0.95"
+  if (normalized === "aceptable") return "0.7"
+  if (normalized === "regular") return "0.475"
+  if (normalized === "mala" || normalized === "malo") return "0.2"
+  return ""
+}
+
 export function BlockEntryForm({
   onSubmit,
+  onChange,
   initialBlocks,
   isLoading = false,
   totalParcelAreaHa,
-  parcelId,
-  regionId,
+  submitLabel = "Guardar y presentar resultado",
 }: Readonly<BlockEntryFormProps>) {
+  const supabase = useMemo(() => createClient(), [])
   const [blocks, setBlocks] = useState<BlockData[]>(initialBlocks || [createEmptyBlock()])
   const [errors, setErrors] = useState<Record<number, BlockErrors>>({})
-  const [existingBlocks, setExistingBlocks] = useState<
-    Array<{ id: string; name: string; data: Database["public"]["Tables"]["blocks"]["Row"] }>
-  >([])
-  const [selectedExistingBlocks, setSelectedExistingBlocks] = useState<Record<number, string>>({})
-  const [dbCrops, setDbCrops] = useState<Database["public"]["Tables"]["crops"]["Row"][]>([])
-  const [dbVarietiesByCrop, setDbVarietiesByCrop] = useState<
-    Record<string, Database["public"]["Tables"]["varieties"]["Row"][]>
-  >({})
-  const [dbCurvesByCrop, setDbCurvesByCrop] = useState<
-    Record<string, Database["public"]["Tables"]["age_yield_curves"]["Row"][]>
-  >({})
-  const [dbTemplatesByCrop, setDbTemplatesByCrop] = useState<
-    Record<string, Database["public"]["Tables"]["cost_templates"]["Row"][]>
-  >({})
-  const supabase = createClient()
+  const [crops, setCrops] = useState<Crop[]>([])
+  const [varieties, setVarieties] = useState<Variety[]>([])
+  const [lookupOptions, setLookupOptions] = useState<LookupOption[]>([])
+  const [profiles, setProfiles] = useState<AgronomicProfile[]>([])
 
   useEffect(() => {
-    if (parcelId) {
-      fetchExistingBlocks()
-    } else {
-      setExistingBlocks([])
+    async function loadCatalogs() {
+      const [cropsRes, varietiesRes, lookupRes, profilesRes] = await Promise.all([
+        supabase.from("crops").select("*").order("name").returns<Crop[]>(),
+        supabase.from("varieties").select("*").order("name").returns<Variety[]>(),
+        supabase
+          .from("lookup_options")
+          .select("*")
+          .eq("active", true)
+          .order("group_key")
+          .order("line_order")
+          .returns<LookupOption[]>(),
+        supabase.from("crop_variety_agronomic_profiles").select("*").returns<AgronomicProfile[]>(),
+      ])
+
+      setCrops((cropsRes.data || []).filter((crop) => crop.active !== false))
+      setVarieties((varietiesRes.data || []).filter((variety) => variety.active !== false))
+      setLookupOptions(lookupRes.data || [])
+      setProfiles(profilesRes.data || [])
     }
-  }, [parcelId])
+
+    loadCatalogs()
+  }, [supabase])
 
   useEffect(() => {
-    ;(async () => {
-      const { data } = await supabase
-        .from("crops")
-        .select("*")
-        .returns<Database["public"]["Tables"]["crops"]["Row"][]>()
-      if (data) setDbCrops(data)
-    })()
-  }, [])
+    onChange?.(blocks)
+  }, [blocks, onChange])
 
-  const ensureLookupsForCrop = async (cropId: string) => {
-    if (!dbVarietiesByCrop[cropId]) {
-      const { data } = await supabase
-        .from("varieties")
-        .select("*")
-        .eq("crop_id", cropId)
-        .returns<Database["public"]["Tables"]["varieties"]["Row"][]>()
-      setDbVarietiesByCrop((prev) => ({ ...prev, [cropId]: data || [] }))
-    }
-    if (!dbCurvesByCrop[cropId]) {
-      const baseCurvesQuery = supabase.from("age_yield_curves").select("*").eq("crop_id", cropId)
-      const curvesWithRegion = regionId
-        ? baseCurvesQuery.or(`region_id.is.null,region_id.eq.${regionId}`)
-        : baseCurvesQuery
-      const { data } = await curvesWithRegion.returns<
-        Database["public"]["Tables"]["age_yield_curves"]["Row"][]
-      >()
-      setDbCurvesByCrop((prev) => ({ ...prev, [cropId]: data || [] }))
-    }
-    if (!dbTemplatesByCrop[cropId]) {
-      const baseTemplatesQuery = supabase.from("cost_templates").select("*").eq("crop_id", cropId)
-      const templatesWithRegion = regionId
-        ? baseTemplatesQuery.or(`region_id.is.null,region_id.eq.${regionId}`)
-        : baseTemplatesQuery
-      const { data } = await templatesWithRegion.returns<
-        Database["public"]["Tables"]["cost_templates"]["Row"][]
-      >()
-      setDbTemplatesByCrop((prev) => ({ ...prev, [cropId]: data || [] }))
+  const optionsByGroup = useMemo(() => optionGroups(lookupOptions), [lookupOptions])
+  const totalBlockArea = blocks.reduce((sum, block) => sum + (toNumber(block.cropAreaHa) || 0), 0)
+  const areaWarning =
+    totalParcelAreaHa && totalBlockArea > totalParcelAreaHa
+      ? `El área de cultivos/lotes (${totalBlockArea.toLocaleString("es-CO")} ha) supera el área total del predio.`
+      : null
+
+  const getProfile = (block: BlockData) =>
+    profiles.find((profile) => profile.crop_id === block.cropId && profile.variety_id === block.varietyId) || null
+
+  const applyProfileDefaults = (block: BlockData) => {
+    const profile = profiles.find(
+      (candidate) => candidate.crop_id === block.cropId && candidate.variety_id === block.varietyId,
+    )
+    if (!profile) return block
+
+    return {
+      ...block,
+      rowDistanceM: block.rowDistanceM || valueText(profile.default_row_distance_m),
+      plantDistanceM:
+        block.plantDistanceM || valueText(profile.default_plant_distance_m),
+      plantingDensityPlantsHa:
+        block.plantingDensityPlantsHa || valueText(profile.default_density_plants_ha),
     }
   }
 
-  // Refetch region-specific lookups when region changes
-  useEffect(() => {
-    // Clear region-scoped caches so we fetch fresh data for the new region
-    setDbCurvesByCrop({})
-    setDbTemplatesByCrop({})
-    // Kick off lookups for any already-selected crops under the new region
-    const cropsToLoad = Array.from(new Set(blocks.map((b) => b.crop).filter(Boolean)))
-    cropsToLoad.forEach((c) => {
-      void ensureLookupsForCrop(c)
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [regionId])
+  const updateBlock = (index: number, field: keyof BlockData, value: string) => {
+    setBlocks((current) => {
+      const next = [...current]
+      let updated = { ...next[index], [field]: value }
 
-  // On initial load (or when blocks change), ensure we load lookups for any preselected crops
-  useEffect(() => {
-    const cropsToLoad = Array.from(new Set(blocks.map((b) => b.crop).filter(Boolean)))
-    cropsToLoad.forEach((c) => {
-      // Only fetch if missing to avoid redundant calls
-      if (!dbVarietiesByCrop[c] || !dbCurvesByCrop[c] || !dbTemplatesByCrop[c]) {
-        void ensureLookupsForCrop(c)
-      }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks])
-
-  const fetchExistingBlocks = async () => {
-    if (!parcelId) {
-      setExistingBlocks([])
-      return
-    }
-
-    try {
-      console.log("Fetching existing blocks for parcel UUID:", parcelId)
-
-      const { data: blocksData, error } = await supabase
-        .from("blocks")
-        .select("*")
-        .eq("parcel_id", parcelId)
-        .returns<Database["public"]["Tables"]["blocks"]["Row"][]>()
-
-      if (error) {
-        console.error("Error fetching blocks:", error)
-        return
-      }
-
-      console.log("Found blocks:", blocksData?.length || 0)
-
-      if (blocksData && blocksData.length > 0) {
-        const formattedBlocks = blocksData.map((block) => ({
-          id: block.id, // Database UUID
-          name: block.block_id, // User-friendly name for display
-          data: block,
-        }))
-        setExistingBlocks(formattedBlocks)
-        console.log("Formatted existing blocks for selection:", formattedBlocks.length)
-      } else {
-        setExistingBlocks([])
-      }
-    } catch (error) {
-      console.error("Error fetching blocks:", error)
-    }
-  }
-
-  const totalBlockArea = blocks.reduce((sum, block) => {
-    const area = Number.parseFloat(block.blockAreaHa) || 0
-    return sum + area
-  }, 0)
-
-  const customCostTotals = useMemo(() => {
-    return blocks.map((block) => {
-      const total = customCostFieldDefinitions.reduce((acc, field) => {
-        const rawValue = block[field.key]
-        const value = typeof rawValue === "string" && rawValue.trim() !== "" ? Number.parseFloat(rawValue) : 0
-
-        if (!Number.isFinite(value)) {
-          return acc
+      if (field === "cropId") {
+        updated = {
+          ...updated,
+          varietyId: "",
+          rowDistanceM: "",
+          plantDistanceM: "",
+          plantingDensityPlantsHa: "",
         }
+      }
 
-        return acc + Math.max(value, 0)
-      }, 0)
+      if (field === "varietyId") {
+        updated = applyProfileDefaults(updated)
+      }
 
-      return Number.isFinite(total) ? total : 0
+      if (field === "fitosanitaryCondition") {
+        updated.fitosanitaryFactor = fitosanitaryFactorFor(value)
+      }
+
+      next[index] = updated
+      return next
     })
-  }, [blocks])
 
-  const copCurrencyFormatter = new Intl.NumberFormat("es-CO", {
-    style: "currency",
-    currency: "COP",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  })
+    if (errors[index]?.[field] || field === "landRentCopHaYear" || field === "soilValueCopHa") {
+      setErrors((current) => {
+        const next = { ...current }
+        next[index] = { ...next[index], [field]: undefined }
+        if (field === "landRentCopHaYear") next[index].soilValueCopHa = undefined
+        if (field === "soilValueCopHa") next[index].landRentCopHaYear = undefined
+        if (Object.values(next[index]).every((message) => !message)) delete next[index]
+        return next
+      })
+    }
+  }
 
   const addBlock = () => {
-    setBlocks([...blocks, createEmptyBlock()])
+    setBlocks((current) => [...current, createEmptyBlock(current.length)])
   }
 
   const removeBlock = (index: number) => {
-    if (blocks.length > 1) {
-      const newBlocks = blocks.filter((_, i) => i !== index)
-      setBlocks(newBlocks)
-      const newErrors = { ...errors }
-      delete newErrors[index]
-      setErrors(newErrors)
-    }
+    if (blocks.length <= 1) return
+    setBlocks((current) => current.filter((_, currentIndex) => currentIndex !== index))
+    setErrors((current) => {
+      const next: Record<number, BlockErrors> = {}
+      Object.entries(current).forEach(([key, value]) => {
+        const numericKey = Number(key)
+        if (numericKey < index) next[numericKey] = value
+        if (numericKey > index) next[numericKey - 1] = value
+      })
+      return next
+    })
   }
 
-  const updateBlock = (index: number, field: keyof BlockData, value: string | string[]) => {
-    const newBlocks = [...blocks]
-    newBlocks[index] = { ...newBlocks[index], [field]: value }
-
-    if (field === "yieldSource" && typeof value === "string") {
-      if (value === "modeled") {
-        newBlocks[index].productionTonsPeriod = ""
-        newBlocks[index].periodDays = "365"
-        newBlocks[index].improductiveYears = ""
-      } else if (value === "measured") {
-        newBlocks[index].ageYieldCurveId = ""
-        if (!newBlocks[index].improductiveYears) {
-          newBlocks[index].improductiveYears = ""
-        }
-      }
-    }
-
-    setBlocks(newBlocks)
-
-    // Only clear errors for fields that can have validation errors
-    const clearErrorIfExists = (errorField: keyof BlockErrors) => {
-      if (errors[index]?.[errorField]) {
-        const newErrors = { ...errors }
-        if (newErrors[index]) {
-          delete newErrors[index][errorField]
-          if (Object.keys(newErrors[index]).length === 0) {
-            delete newErrors[index]
-          }
-        }
-        setErrors(newErrors)
-      }
-    }
-
-    // Trigger lookup fetch and reset dependent fields on crop change
-    if (field === "crop" && typeof value === "string" && value) {
-      void ensureLookupsForCrop(value)
-      const reset = [...newBlocks]
-      reset[index].variety = ""
-      reset[index].ageYieldCurveId = ""
-      reset[index].costTemplateId = ""
-      setBlocks(reset)
-    }
-
-    // Map BlockData fields to BlockErrors fields only when they exist
-    switch (field) {
-      case 'blockId':
-        clearErrorIfExists('blockId')
-        break
-      case 'blockAreaHa':
-        clearErrorIfExists('blockAreaHa')
-        break
-      case 'crop':
-        clearErrorIfExists('crop')
-        break
-      case 'plantingDate':
-        clearErrorIfExists('plantingDate')
-        break
-      case 'yieldSource':
-        clearErrorIfExists('yieldSource')
-        break
-      case 'priceFarmgateCopPerKg':
-        clearErrorIfExists('priceFarmgateCopPerKg')
-        break
-      case 'costSource':
-        clearErrorIfExists('costSource')
-        break
-      case 'productionTonsPeriod':
-        clearErrorIfExists('productionTonsPeriod')
-        break
-      case 'periodDays':
-        clearErrorIfExists('periodDays')
-        break
-      case 'improductiveYears':
-        clearErrorIfExists('improductiveYears')
-        break
-      case 'ageYieldCurveId':
-        clearErrorIfExists('ageYieldCurveId')
-        break
-      case 'costTemplateId':
-        clearErrorIfExists('costTemplateId')
-        break
-      default:
-        // Other fields don't have validation errors to clear
-        break
-    }
-  }
-
-  const validateBlocks = (): boolean => {
-    const newErrors: Record<number, BlockErrors> = {}
+  const validateBlocks = () => {
+    const nextErrors: Record<number, BlockErrors> = {}
 
     blocks.forEach((block, index) => {
       const blockErrors: BlockErrors = {}
+      const ageYears = block.ageYears.trim() ? toNumber(block.ageYears) : null
+      const cropAreaHa = block.cropAreaHa ? toNumber(block.cropAreaHa) : null
+      const commercialPriceCopKg = block.commercialPriceCopKg ? toNumber(block.commercialPriceCopKg) : null
+      const landRentCopHaYear = block.landRentCopHaYear.trim() ? toNumber(block.landRentCopHaYear) : null
+      const soilValueCopHa = block.soilValueCopHa.trim() ? toNumber(block.soilValueCopHa) : null
 
-      if (!block.blockId.trim()) blockErrors.blockId = "El ID del cultivo/lote es requerido"
-      if (!block.blockAreaHa) {
-        blockErrors.blockAreaHa = "El área del cultivo/lote es requerida"
-      } else {
-        const area = Number.parseFloat(block.blockAreaHa)
-        if (isNaN(area) || area <= 0) {
-          blockErrors.blockAreaHa = "El área debe ser un número positivo"
-        }
+      if (!block.blockLabel.trim()) blockErrors.blockLabel = "El nombre del cultivo/lote es requerido"
+      if (!block.cropId) blockErrors.cropId = "El cultivo es requerido"
+      if (!block.varietyId) blockErrors.varietyId = "La variedad es requerida"
+      if (!block.fitosanitaryCondition) blockErrors.fitosanitaryCondition = "La condición fitosanitaria es requerida"
+      if (!block.ageYears.trim()) {
+        blockErrors.ageYears = "La edad es requerida"
+      } else if (ageYears === null || ageYears < 0) {
+        blockErrors.ageYears = "La edad debe ser un número mayor o igual a cero"
       }
-      if (!block.crop) blockErrors.crop = "El cultivo es requerido"
-      if (!block.plantingDate) blockErrors.plantingDate = "La fecha de siembra es requerida"
-      if (!block.yieldSource) blockErrors.yieldSource = "La fuente de rendimiento es requerida"
-      if (!block.priceFarmgateCopPerKg) {
-        blockErrors.priceFarmgateCopPerKg = "El precio es requerido"
-      } else {
-        const price = Number.parseFloat(block.priceFarmgateCopPerKg)
-        if (isNaN(price) || price <= 0) {
-          blockErrors.priceFarmgateCopPerKg = "El precio debe ser positivo"
-        }
+      if (!block.cropAreaHa) {
+        blockErrors.cropAreaHa = "El área del cultivo es requerida"
+      } else if (cropAreaHa === null || cropAreaHa <= 0) {
+        blockErrors.cropAreaHa = "El área debe ser un número positivo"
       }
-      if (!block.costSource) blockErrors.costSource = "La fuente de costos es requerida"
-
-      if (block.yieldSource === "measured") {
-        if (!block.productionTonsPeriod) {
-          blockErrors.productionTonsPeriod = "La producción por hectárea es requerida para rendimiento medido"
-        }
-        if (!block.periodDays) {
-          blockErrors.periodDays = "Los días del período son requeridos para rendimiento medido"
-        }
-        if (!block.improductiveYears) {
-          blockErrors.improductiveYears = "Indique los años improductivos para rendimiento medido"
-        } else {
-          const improductiveYears = Number.parseFloat(block.improductiveYears)
-          if (Number.isNaN(improductiveYears) || improductiveYears < 0) {
-            blockErrors.improductiveYears = "Los años improductivos deben ser un número mayor o igual a 0"
-          }
-        }
-            } else if (block.yieldSource === "modeled") {
-        if (!block.ageYieldCurveId) {
-          blockErrors.ageYieldCurveId = "La curva edad-rendimiento es requerida para rendimiento modelado"
-        }
+      if (!block.commercialPriceCopKg) {
+        blockErrors.commercialPriceCopKg = "El precio de comercialización es requerido"
+      } else if (commercialPriceCopKg === null || commercialPriceCopKg <= 0) {
+        blockErrors.commercialPriceCopKg = "El precio debe ser un número positivo"
+      }
+      if (block.cropId && block.varietyId && !getProfile(block)) {
+        blockErrors.varietyId = "La variedad seleccionada no está disponible para este cultivo"
+      }
+      if (landRentCopHaYear !== null && landRentCopHaYear < 0) {
+        blockErrors.landRentCopHaYear = "El costo de arriendo debe ser mayor o igual a cero"
+      }
+      if (soilValueCopHa !== null && soilValueCopHa < 0) {
+        blockErrors.soilValueCopHa = "El valor del suelo debe ser mayor o igual a cero"
+      }
+      if ((landRentCopHaYear || 0) > 0 && (soilValueCopHa || 0) > 0) {
+        const message = "Registre costo de arriendo o valor del suelo, no ambos"
+        blockErrors.landRentCopHaYear = message
+        blockErrors.soilValueCopHa = message
       }
 
-      if (block.costSource === "standard_template" && !block.costTemplateId) {
-        blockErrors.costTemplateId = "La plantilla de costos es requerida"
-      }
-
-      if (Object.keys(blockErrors).length > 0) {
-        newErrors[index] = blockErrors
-      }
+      if (Object.keys(blockErrors).length > 0) nextErrors[index] = blockErrors
     })
 
-    setErrors(newErrors)
-    return Object.keys(newErrors).length === 0
+    setErrors(nextErrors)
+    return Object.keys(nextErrors).length === 0
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (validateBlocks()) {
-      onSubmit(blocks)
-    }
-  }
-
-  const calculateAge = (plantingDate: string): number => {
-    if (!plantingDate) return 0
-    const planting = new Date(plantingDate)
-    const now = new Date()
-    return Math.floor((now.getTime() - planting.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
-  }
-
-  const getCurveForBlock = (block: BlockData): AgeYieldCurveRow | undefined => {
-    if (!block.ageYieldCurveId) return undefined
-    const curves = dbCurvesByCrop[block.crop]
-    return curves?.find((curve) => curve.id === block.ageYieldCurveId)
-  }
-
-  const getFirstProductiveAge = (curve?: AgeYieldCurveRow): number | undefined => {
-    if (!curve) return undefined
-    const data = (curve.curve_data as Record<string, unknown>) || {}
-    const positiveAges = Object.entries(data)
-      .map(([ageKey, value]) => {
-        const ageNumber = Number(ageKey)
-        if (!Number.isFinite(ageNumber)) return undefined
-        const numericValue =
-          typeof value === "number" ? value : Number.parseFloat(String(value ?? ""))
-        if (!Number.isFinite(numericValue) || Number.isNaN(numericValue)) return undefined
-        return numericValue > 0 ? ageNumber : undefined
-      })
-      .filter((age): age is number => age !== undefined)
-    if (positiveAges.length === 0) return undefined
-    return Math.min(...positiveAges)
-  }
-
-  const isBlockImproductive = (block: BlockData): boolean => {
-    const age = calculateAge(block.plantingDate)
-    if (!Number.isFinite(age) || age < 0) {
-      return true
-    }
-    if (block.yieldSource === "measured") {
-      const improductiveYears = Number.parseFloat(block.improductiveYears || "")
-      if (!Number.isFinite(improductiveYears)) {
-        return true
-      }
-      return age < improductiveYears
-    }
-    const curve = getCurveForBlock(block)
-    const firstProductiveAge = getFirstProductiveAge(curve)
-    if (firstProductiveAge !== undefined) {
-      return age < firstProductiveAge
-    }
-    return age <= 3
-  }
-
-  const handleBlockSelection = (value: string, index: number) => {
-    console.log(`Block selection changed for index ${index}:`, value)
-
-    if (value === "none") {
-      // Clear selection and reset to empty block
-      setSelectedExistingBlocks((prev) => {
-        const updated = { ...prev }
-        delete updated[index]
-        return updated
-      })
-
-      const newBlocks = [...blocks]
-      newBlocks[index] = createEmptyBlock()
-      setBlocks(newBlocks)
-      return
-    }
-
-    const selectedBlock = existingBlocks.find((b) => b.id === value)
-    if (!selectedBlock) {
-      console.log(`Block not found with ID: ${value}`)
-      return
-    }
-
-    console.log(`Found selected block:`, selectedBlock)
-
-    setSelectedExistingBlocks((prev) => ({
-      ...prev,
-      [index]: value, // Store the database UUID
-    }))
-
-    // Map database fields to form fields
-    const dbBlock = selectedBlock.data
-    const mappedBlock: BlockData = {
-      blockId: dbBlock.block_id, // Display name from database
-      blockAreaHa: dbBlock.block_area_ha?.toString() || "",
-      crop: dbBlock.crop || "",
-      variety: dbBlock.variety || "",
-      plantingDate: dbBlock.planting_date || "",
-      densitySpacing: dbBlock.density_spacing || "",
-      yieldSource: dbBlock.yield_source || "",
-      productionTonsPeriod: dbBlock.production_tons_period?.toString() || "",
-      periodDays: dbBlock.period_days?.toString() || "",
-      evidenceUploads:
-        Array.isArray(dbBlock.evidence_uploads)
-          ? (dbBlock.evidence_uploads as unknown[]).filter((v): v is string => typeof v === "string")
-          : [],
-      ageYieldCurveId: dbBlock.age_yield_curve_id || "",
-      realizationFactor: dbBlock.realization_factor?.toString() || "",
-      priceFarmgateCopPerKg: dbBlock.price_farmgate_cop_per_kg?.toString() || "",
-      priceSourceNote: dbBlock.price_source_note || "",
-      costSource: dbBlock.cost_source || "",
-      costTemplateId: dbBlock.cost_template_id || "",
-      landRentCopPerHa: dbBlock.land_rent_cop_per_ha?.toString() || "",
-      fertilizersCopPerHa: dbBlock.fertilizers_cop_per_ha?.toString() || "",
-      cropProtectionCopPerHa: dbBlock.crop_protection_cop_per_ha?.toString() || "",
-      propagationMaterialCopPerHa: dbBlock.propagation_material_cop_per_ha?.toString() || "",
-      laborCopPerHa: dbBlock.labor_cop_per_ha?.toString() || "",
-      irrigationEnergyCopPerHa: dbBlock.irrigation_energy_cop_per_ha?.toString() || "",
-      maintenanceUpkeepCopPerHa: dbBlock.maintenance_upkeep_cop_per_ha?.toString() || "",
-      harvestCopPerHa: dbBlock.harvest_cop_per_ha?.toString() || "",
-      transportLogisticsCopPerHa: dbBlock.transport_logistics_cop_per_ha?.toString() || "",
-      servicesContractsCopPerHa: dbBlock.services_contracts_cop_per_ha?.toString() || "",
-      adminOverheadsCopPerHa: dbBlock.admin_overheads_cop_per_ha?.toString() || "",
-      financedAmountCop: dbBlock.financed_amount_cop?.toString() || "",
-      eaRate: dbBlock.ea_rate?.toString() || "",
-      cumulativeOutlaysToDateCop: dbBlock.cumulative_outlays_to_date_cop?.toString() || "",
-      inpFactor: dbBlock.inp_factor?.toString() || "",
-      improductiveYears: dbBlock.improductive_years?.toString() || "",
-      dnpDiscountRate: dbBlock.dnp_discount_rate?.toString() || "",
-      notes: dbBlock.notes || "",
-    }
-
-    console.log("Mapped block data:", mappedBlock)
-
-    // Update the blocks array with the mapped data
-    setBlocks((prevBlocks) => {
-      const newBlocks = [...prevBlocks]
-      newBlocks[index] = mappedBlock
-      return newBlocks
-    })
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault()
+    if (validateBlocks()) onSubmit(blocks)
   }
 
   return (
-    <TooltipProvider>
-      <div className="w-full max-w-6xl mx-auto space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl font-semibold text-balance">Información de Cultivos/Lotes</CardTitle>
-            <CardDescription className="text-pretty">
-              Agregue detalles para cada cultivo/lote plantado dentro de la parcela. Cada cultivo/lote puede tener diferentes
-              cultivos, edades y prácticas de manejo.
-            </CardDescription>
-            {totalParcelAreaHa && (
-              <div className="flex items-center gap-4 text-sm">
-                <Badge variant="outline">Total Parcela: {totalParcelAreaHa} ha</Badge>
-                <Badge variant={totalBlockArea > totalParcelAreaHa ? "destructive" : "secondary"}>
-                  Total Cultivos/Lotes: {totalBlockArea.toFixed(4)} ha
-                </Badge>
-              </div>
-            )}
-          </CardHeader>
-        </Card>
+    <div className="space-y-6">
+      {areaWarning ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{areaWarning}</div>
+      ) : null}
 
-        <form onSubmit={handleSubmit} className="space-y-8">
-          {blocks.map((block, index) => (
-            <Card key={index} className="relative">
-              <CardHeader className="pb-4">
+      <form onSubmit={handleSubmit} className="space-y-6" noValidate>
+        {blocks.map((block, index) => {
+          const filteredVarieties = varieties.filter((variety) => variety.crop_id === block.cropId)
+          const profile = getProfile(block)
+          const rowDistanceM = block.rowDistanceM || valueText(profile?.default_row_distance_m)
+          const plantDistanceM = block.plantDistanceM || valueText(profile?.default_plant_distance_m)
+          const plantingFrameDensity = densityFromSpacing(rowDistanceM, plantDistanceM, block.plantingFrame)
+          const hasLandRent = hasPositiveValue(block.landRentCopHaYear)
+          const hasSoilValue = hasPositiveValue(block.soilValueCopHa)
+          const rentDisabled = hasSoilValue && !hasLandRent
+          const soilDisabled = hasLandRent && !hasSoilValue
+
+          return (
+            <Card key={`${block.blockLabel}-${index}`} className="w-full">
+              <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">Cultivo/Lote {index + 1}</CardTitle>
-                  {blocks.length > 1 && (
+                  <div>
+                    <CardTitle className="text-xl flex items-center gap-2">
+                      <SproutIcon className="h-5 w-5 text-emerald-600" />
+                      Cultivo/Lote {index + 1}
+                    </CardTitle>
+                    <CardDescription>Datos del cultivo y condiciones del predio</CardDescription>
+                  </div>
+                  {blocks.length > 1 ? (
                     <Button type="button" variant="outline" size="sm" onClick={() => removeBlock(index)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
-                  )}
+                  ) : null}
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label htmlFor={`blockId-${index}`}>ID del Cultivo/Lote *</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Identificador único del cultivo/lote dentro de la parcela</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <div className="w-full">
-                      <CreatableCombobox
-                        value={block.blockId}
-                        onChange={(val) => updateBlock(index, "blockId", val)}
-                        fetchOptions={async (q) => {
-                          if (!parcelId) return []
-                          const { data } = await supabase
-                            .from("blocks")
-                            .select("id, block_id")
-                            .eq("parcel_id", parcelId)
-                            .ilike("block_id", `%${q}%`)
-                            .returns<Pick<Database["public"]["Tables"]["blocks"]["Row"], "id" | "block_id">[]>()
-                          return (data || []).map((b) => ({ id: b.id, label: b.block_id }))
-                        }}
-                        onSelectOption={(opt) => handleBlockSelection(opt.id, index)}
-                        placeholder={"Buscar o crear cultivo/lote..."}
-                        emptyHint={"Sin coincidencias"}
-                        className="w-full justify-between"
-                      />
-                    </div>
-                    {errors[index]?.blockId && <p className="text-sm text-destructive">{errors[index]?.blockId}</p>}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label htmlFor={`blockArea-${index}`}>Área (ha) *</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Área total del cultivo/lote en hectáreas. Debe ser menor o igual al área total de la parcela.</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <Input
-                      id={`blockArea-${index}`}
-                      type="number"
-                      step="0.0001"
-                      min="0"
-                      placeholder="0.0000"
-                      value={block.blockAreaHa}
-                      onChange={(e) => updateBlock(index, "blockAreaHa", e.target.value)}
-                      className={errors[index]?.blockAreaHa ? "border-destructive" : ""}
-                    />
-                    {errors[index]?.blockAreaHa && (
-                      <p className="text-sm text-destructive">{errors[index]?.blockAreaHa}</p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label htmlFor={`densitySpacing-${index}`}>Espaciamiento</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Distancia entre plantas (ej: 9×9 m para palma de aceite, 3×3 m para cacao)</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <Input
-                      id={`densitySpacing-${index}`}
-                      placeholder="ej: 9×9 m"
-                      value={block.densitySpacing}
-                      onChange={(e) => updateBlock(index, "densitySpacing", e.target.value)}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label htmlFor={`crop-${index}`}>Cultivo *</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Tipo de cultivo plantado en este cultivo/lote</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <Select
-                      value={block.crop}
-                      onValueChange={(value) => updateBlock(index, "crop", value)}
-                      disabled={dbCrops.length === 0}
-                    >
-                      {dbCrops.length === 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <SelectTrigger className={errors[index]?.crop ? "border-destructive" : ""} disabled>
-                              <SelectValue placeholder="No hay cultivos disponibles" />
-                            </SelectTrigger>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>No hay cultivos configurados en el sistema</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <SelectTrigger className={errors[index]?.crop ? "border-destructive" : ""}>
-                          <SelectValue placeholder="Seleccionar cultivo" />
-                        </SelectTrigger>
-                      )}
-                      <SelectContent>
-                        {dbCrops.map((crop) => (
-                          <SelectItem key={crop.id} value={crop.id}>
-                            {crop.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {errors[index]?.crop && <p className="text-sm text-destructive">{errors[index]?.crop}</p>}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label htmlFor={`variety-${index}`}>Variedad</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Variedad específica del cultivo seleccionado</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <Select
-                      value={block.variety}
-                      onValueChange={(value) => updateBlock(index, "variety", value)}
-                      disabled={!block.crop || (dbVarietiesByCrop[block.crop] || []).length === 0}
-                    >
-                      {(!block.crop || (dbVarietiesByCrop[block.crop] || []).length === 0) ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <SelectTrigger disabled>
-                              <SelectValue
-                                placeholder={
-                                  !block.crop ? "Seleccione un cultivo primero" : "Sin variedades disponibles"
-                                }
-                              />
-                            </SelectTrigger>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>
-                              {!block.crop
-                                ? "Seleccione un cultivo para ver variedades"
-                                : "No hay variedades configuradas para este cultivo"}
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <SelectTrigger>
-                          <SelectValue placeholder="Seleccionar variedad" />
-                        </SelectTrigger>
-                      )}
-                      <SelectContent>
-                        {block.crop &&
-                          (dbVarietiesByCrop[block.crop] || []).map((variety) => (
-                            <SelectItem key={variety.id} value={variety.id}>
-                              {variety.name}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Label htmlFor={`plantingDate-${index}`}>Fecha de Siembra *</Label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Fecha cuando se plantó este cultivo/lote. Se usa para calcular la edad del cultivo.</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <Input
-                      id={`plantingDate-${index}`}
-                      type="date"
-                      value={block.plantingDate}
-                      onChange={(e) => updateBlock(index, "plantingDate", e.target.value)}
-                      className={errors[index]?.plantingDate ? "border-destructive" : ""}
-                    />
-                    {errors[index]?.plantingDate && (
-                      <p className="text-sm text-destructive">{errors[index]?.plantingDate}</p>
-                    )}
-                    {block.plantingDate && (
-                      <p className="text-sm text-muted-foreground">Edad: {calculateAge(block.plantingDate)} años</p>
-                    )}
-                  </div>
-                </div>
-
-                <Separator />
-
                 <div className="space-y-4">
-                  <h3 className="font-medium flex items-center gap-2">
-                    <TrendingUpIcon className="h-4 w-4" />
-                    Fuente de Rendimiento
-                  </h3>
-                  <div className="flex items-center gap-2">
-                    <RadioGroup
-                      value={block.yieldSource}
-                      onValueChange={(value) => updateBlock(index, "yieldSource", value)}
-                      className="flex gap-6"
-                    >
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="measured" id={`measured-${index}`} />
-                        <Label htmlFor={`measured-${index}`}>Medido</Label>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="modeled" id={`modeled-${index}`} />
-                        <Label htmlFor={`modeled-${index}`}>Modelado</Label>
-                      </div>
-                    </RadioGroup>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Medido: usar datos reales de producción. Modelado: usar curvas estándar edad-rendimiento.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  {errors[index]?.yieldSource && (
-                    <p className="text-sm text-destructive">{errors[index]?.yieldSource}</p>
-                  )}
-
-                  {block.yieldSource === "measured" && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg">
+                  <h3 className="font-medium">Datos generales del cultivo</h3>
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor={`production-${index}`}>Producción (ton/ha/período) *</Label>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Producción medida en toneladas por hectárea durante el período especificado</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <Input
-                          id={`production-${index}`}
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          placeholder="0.00"
-                          value={block.productionTonsPeriod}
-                          onChange={(e) => updateBlock(index, "productionTonsPeriod", e.target.value)}
-                          className={errors[index]?.productionTonsPeriod ? "border-destructive" : ""}
+                        <Label htmlFor={`crop-${index}`}>Cultivo *</Label>
+                        <SelectField
+                          id={`crop-${index}`}
+                          value={block.cropId}
+                          onChange={(value) => updateBlock(index, "cropId", value)}
+                          className={errors[index]?.cropId ? "border-destructive" : ""}
+                          required
+                          invalid={Boolean(errors[index]?.cropId)}
+                          placeholder="Seleccione cultivo"
+                          options={crops.map((crop) => ({ value: crop.id, label: crop.name }))}
                         />
-                        {errors[index]?.productionTonsPeriod && (
-                          <p className="text-sm text-destructive">{errors[index]?.productionTonsPeriod}</p>
-                        )}
+                        {errors[index]?.cropId ? <p className="text-sm text-destructive">{errors[index]?.cropId}</p> : null}
                       </div>
+
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor={`periodDays-${index}`}>Período (días) *</Label>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>
-                                Número de días durante los cuales se midió la producción por hectárea (típicamente 365 para un año)
-                              </p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <Input
-                          id={`periodDays-${index}`}
-                          type="number"
-                          min="1"
-                          placeholder="365"
-                          value={block.periodDays}
-                          onChange={(e) => updateBlock(index, "periodDays", e.target.value)}
-                          className={errors[index]?.periodDays ? "border-destructive" : ""}
+                        <Label htmlFor={`variety-${index}`}>Variedad *</Label>
+                        <SelectField
+                          id={`variety-${index}`}
+                          value={block.varietyId}
+                          onChange={(value) => updateBlock(index, "varietyId", value)}
+                          className={errors[index]?.varietyId ? "border-destructive" : ""}
+                          required
+                          invalid={Boolean(errors[index]?.varietyId)}
+                          placeholder="Seleccione variedad"
+                          disabled={!block.cropId}
+                          options={filteredVarieties.map((variety) => ({ value: variety.id, label: variety.name }))}
                         />
-                        {errors[index]?.periodDays && (
-                          <p className="text-sm text-destructive">{errors[index]?.periodDays}</p>
-                        )}
+                        {errors[index]?.varietyId ? (
+                          <p className="text-sm text-destructive">{errors[index]?.varietyId}</p>
+                        ) : null}
                       </div>
+
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor={`improductiveYears-${index}`}>Años improductivos *</Label>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Indique cuántos años permanece el cultivo en fase improductiva antes de generar producción.</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <Input
-                          id={`improductiveYears-${index}`}
-                          type="number"
-                          min="0"
-                          step="1"
-                          placeholder="0"
-                          value={block.improductiveYears}
-                          onChange={(e) => updateBlock(index, "improductiveYears", e.target.value)}
-                          className={errors[index]?.improductiveYears ? "border-destructive" : ""}
+                        <Label htmlFor={`cropType-${index}`}>Tipo de Cultivo</Label>
+                        <SelectField
+                          id={`cropType-${index}`}
+                          value={block.cropType}
+                          onChange={(value) => updateBlock(index, "cropType", value)}
+                          placeholder="Seleccione tipo"
+                          options={(optionsByGroup.crop_type || []).map((option) => ({ value: option.value, label: option.label }))}
                         />
-                        {errors[index]?.improductiveYears && (
-                          <p className="text-sm text-destructive">{errors[index]?.improductiveYears}</p>
-                        )}
                       </div>
-                    </div>
-                  )}
 
-                  {block.yieldSource === "modeled" && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg">
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor={`ageYieldCurve-${index}`}>Curva Edad-Rendimiento *</Label>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Curva estándar que relaciona la edad del cultivo con el rendimiento esperado</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <Select
-                          value={block.ageYieldCurveId}
-                          onValueChange={(value) => updateBlock(index, "ageYieldCurveId", value)}
-                          disabled={(dbCurvesByCrop[block.crop] || []).length === 0}
-                        >
-                          {(dbCurvesByCrop[block.crop] || []).length === 0 ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <SelectTrigger className={errors[index]?.ageYieldCurveId ? "border-destructive" : ""} disabled>
-                                  <SelectValue placeholder="Sin curvas disponibles" />
-                                </SelectTrigger>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>No hay curvas edad-rendimiento configuradas para este cultivo/departamento o municipio</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : (
-                            <SelectTrigger className={errors[index]?.ageYieldCurveId ? "border-destructive" : ""}>
-                              <SelectValue placeholder="Seleccionar curva" />
-                            </SelectTrigger>
-                          )}
-                          <SelectContent>
-                            {(dbCurvesByCrop[block.crop] || []).map((curve) => (
-                              <SelectItem key={curve.id} value={curve.id}>
-                                {curve.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {errors[index]?.ageYieldCurveId && (
-                          <p className="text-sm text-destructive">{errors[index]?.ageYieldCurveId}</p>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor={`realizationFactor-${index}`}>Factor de Realización</Label>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Multiplicador para ajustes regionales o de manejo (por defecto: 1.00)</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <Input
-                          id={`realizationFactor-${index}`}
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          placeholder="1.00"
-                          value={block.realizationFactor}
-                          onChange={(e) => updateBlock(index, "realizationFactor", e.target.value)}
+                        <Label htmlFor={`productionSystem-${index}`}>Sistema Productivo</Label>
+                        <SelectField
+                          id={`productionSystem-${index}`}
+                          value={block.productionSystem}
+                          onChange={(value) => updateBlock(index, "productionSystem", value)}
+                          placeholder="Seleccione sistema"
+                          options={(optionsByGroup.production_system || []).map((option) => ({ value: option.value, label: option.label }))}
                         />
-                        <p className="text-sm text-muted-foreground">
-                          Multiplicador para ajustes regionales (por defecto: 1.00)
-                        </p>
                       </div>
-                    </div>
-                  )}
-                </div>
 
-                <Separator />
-
-                <div className="space-y-4">
-                  <h3 className="font-medium flex items-center gap-2">
-                    <DollarSignIcon className="h-4 w-4" />
-                    Información de Precios
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor={`price-${index}`}>Precio en Finca (COP/kg) *</Label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Precio que recibe el productor por kilogramo de producto en la finca</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <Input
-                        id={`price-${index}`}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0.00"
-                        value={block.priceFarmgateCopPerKg}
-                        onChange={(e) => updateBlock(index, "priceFarmgateCopPerKg", e.target.value)}
-                        className={errors[index]?.priceFarmgateCopPerKg ? "border-destructive" : ""}
-                      />
-                      {errors[index]?.priceFarmgateCopPerKg && (
-                        <p className="text-sm text-destructive">{errors[index]?.priceFarmgateCopPerKg}</p>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor={`priceSource-${index}`}>Nota de Fuente de Precio</Label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>
-                              Fuente o referencia del precio utilizado (ej: contrato con molino X, precio de mercado)
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <Input
-                        id={`priceSource-${index}`}
-                        placeholder="ej: Contrato con molino X"
-                        value={block.priceSourceNote}
-                        onChange={(e) => updateBlock(index, "priceSourceNote", e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="space-y-4">
-                  <h3 className="font-medium flex items-center gap-2">
-                    <CalculatorIcon className="h-4 w-4" />
-                    Información de Costos
-                  </h3>
-                  <div className="flex items-center gap-2">
-                    <RadioGroup
-                      value={block.costSource}
-                      onValueChange={(value) => updateBlock(index, "costSource", value)}
-                      className="flex gap-6"
-                    >
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="standard_template" id={`template-${index}`} />
-                        <Label htmlFor={`template-${index}`}>Plantilla Estándar</Label>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="custom_entered" id={`custom-${index}`} />
-                        <Label htmlFor={`custom-${index}`}>Personalizado</Label>
-                      </div>
-                    </RadioGroup>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Plantilla: usar costos estándar predefinidos. Personalizado: ingresar costos específicos.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  {errors[index]?.costSource && <p className="text-sm text-destructive">{errors[index]?.costSource}</p>}
-
-                  {block.costSource === "standard_template" && (
-                    <div className="p-4 bg-muted/50 rounded-lg">
                       <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor={`costTemplate-${index}`}>Plantilla de Costos *</Label>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Plantilla predefinida con costos estándar para el cultivo y departamento/municipio seleccionados</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <Select
-                          value={block.costTemplateId}
-                          onValueChange={(value) => updateBlock(index, "costTemplateId", value)}
-                          disabled={(dbTemplatesByCrop[block.crop] || []).length === 0}
-                        >
-                          {(dbTemplatesByCrop[block.crop] || []).length === 0 ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <SelectTrigger className={errors[index]?.costTemplateId ? "border-destructive" : ""} disabled>
-                                  <SelectValue placeholder="Sin plantillas disponibles" />
-                                </SelectTrigger>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>No hay plantillas de costos configuradas para este cultivo/departamento o municipio</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : (
-                            <SelectTrigger className={errors[index]?.costTemplateId ? "border-destructive" : ""}>
-                              <SelectValue placeholder="Seleccionar plantilla" />
-                            </SelectTrigger>
-                          )}
-                          <SelectContent>
-                            {(dbTemplatesByCrop[block.crop] || []).map((template) => (
-                              <SelectItem key={template.id} value={template.id}>
-                                {template.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {errors[index]?.costTemplateId && (
-                          <p className="text-sm text-destructive">{errors[index]?.costTemplateId}</p>
-                        )}
+                        <Label htmlFor={`fitosanitary-${index}`}>Condición Fitosanitaria</Label>
+                        <SelectField
+                          id={`fitosanitary-${index}`}
+                          value={block.fitosanitaryCondition}
+                          onChange={(value) => updateBlock(index, "fitosanitaryCondition", value)}
+                          className={errors[index]?.fitosanitaryCondition ? "border-destructive" : ""}
+                          required
+                          invalid={Boolean(errors[index]?.fitosanitaryCondition)}
+                          placeholder="Seleccione condición"
+                          options={(optionsByGroup.fitosanitary_condition || []).map((option) => ({
+                            value: option.value,
+                            label: option.label,
+                          }))}
+                        />
+                        {errors[index]?.fitosanitaryCondition ? (
+                          <p className="text-sm text-destructive">{errors[index]?.fitosanitaryCondition}</p>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor={`plantingFrame-${index}`}>Marco de Plantación</Label>
+                        <SelectField
+                          id={`plantingFrame-${index}`}
+                          value={block.plantingFrame}
+                          onChange={(value) => updateBlock(index, "plantingFrame", value)}
+                          placeholder="Seleccione marco"
+                          options={(optionsByGroup.planting_frame || []).map((option) => ({
+                            value: option.value,
+                            label: option.label,
+                          }))}
+                        />
                       </div>
                     </div>
-                  )}
 
-                  {block.costSource === "custom_entered" && (
-                    <div className="p-4 bg-muted/50 rounded-lg space-y-4">
-                      <p className="text-sm text-muted-foreground">Ingrese costos por hectárea (COP/ha/año)</p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {customCostFieldDefinitions.map(({ key, label, tooltip }) => (
-                          <div key={String(key)} className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <Label htmlFor={`${String(key)}-${index}`}>{label}</Label>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>{tooltip}</p>
-                                </TooltipContent>
-                              </Tooltip>
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-medium text-muted-foreground">Medidas y producción</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor={`ageYears-${index}`}>Edad (años) *</Label>
+                          <NumericInput
+                            id={`ageYears-${index}`}
+                            placeholder="3"
+                            required
+                            aria-invalid={Boolean(errors[index]?.ageYears)}
+                            value={block.ageYears}
+                            onValueChange={(value) => updateBlock(index, "ageYears", value)}
+                            className={errors[index]?.ageYears ? "border-destructive" : ""}
+                          />
+                          {errors[index]?.ageYears ? <p className="text-sm text-destructive">{errors[index]?.ageYears}</p> : null}
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor={`cropArea-${index}`}>Área del Cultivo (ha) *</Label>
+                          <NumericInput
+                            id={`cropArea-${index}`}
+                            required
+                            placeholder="1"
+                            aria-invalid={Boolean(errors[index]?.cropAreaHa)}
+                            value={block.cropAreaHa}
+                            onValueChange={(value) => updateBlock(index, "cropAreaHa", value)}
+                            className={errors[index]?.cropAreaHa ? "border-destructive" : ""}
+                          />
+                          {errors[index]?.cropAreaHa ? (
+                            <p className="text-sm text-destructive">{errors[index]?.cropAreaHa}</p>
+                          ) : null}
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor={`freshYield-${index}`}>Rendimiento en Fresco (kg/ha)</Label>
+                          <NumericInput
+                            id={`freshYield-${index}`}
+                            placeholder="12.000"
+                            value={block.freshYieldKgHa}
+                            onValueChange={(value) => updateBlock(index, "freshYieldKgHa", value)}
+                          />
+                        </div>
+
+                        <div className="space-y-3 rounded-md border bg-muted/30 p-4 sm:col-span-2 lg:col-span-3">
+                          <div>
+                            <div className="text-sm font-medium">Medidas de referencia</div>
+                            <div className="text-xs text-muted-foreground">Según cultivo y variedad seleccionados</div>
+                          </div>
+                          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+                            <div>
+                              <dt className="text-muted-foreground">Distancia entre plantas</dt>
+                              <dd className="font-medium">{formatMeasurement(plantDistanceM, " m")}</dd>
                             </div>
-                            <Input
-                              id={`${String(key)}-${index}`}
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              placeholder="0.00"
-                              value={block[key] as string}
-                              onChange={(e) => updateBlock(index, key, e.target.value)}
-                            />
-                          </div>
-                        ))}
+                            <div>
+                              <dt className="text-muted-foreground">Distancia entre surcos</dt>
+                              <dd className="font-medium">{formatMeasurement(rowDistanceM, " m")}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground">Densidad de siembra</dt>
+                              <dd className="font-medium">
+                                {plantingFrameDensity === null
+                                  ? "Seleccione marco de plantación"
+                                  : formatMeasurement(plantingFrameDensity, " plantas/ha")}
+                              </dd>
+                            </div>
+                          </dl>
+                        </div>
                       </div>
-                      <Separator />
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                        <span className="font-medium text-muted-foreground">Total costos personalizados</span>
-                        <span className="text-lg font-semibold text-emerald-600">
-                          {copCurrencyFormatter.format(customCostTotals[index] || 0)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <Separator />
-
-                <div className="space-y-4">
-                  <h3 className="font-medium">Información Financiera</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor={`financedAmount-${index}`}>Monto Financiado (COP)</Label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Monto total financiado para este cultivo/lote (créditos, préstamos)</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <Input
-                        id={`financedAmount-${index}`}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0.00"
-                        value={block.financedAmountCop}
-                        onChange={(e) => updateBlock(index, "financedAmountCop", e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor={`eaRate-${index}`}>Tasa Efectiva Anual</Label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Tasa de interés efectiva anual del financiamiento (como decimal, ej: 0.12 para 12%)</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <Input
-                        id={`eaRate-${index}`}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="1"
-                        placeholder="0.12"
-                        value={block.eaRate}
-                        onChange={(e) => updateBlock(index, "eaRate", e.target.value)}
-                      />
-                      <p className="text-sm text-muted-foreground">Ingrese como decimal (ej: 0.12 para 12%)</p>
                     </div>
                   </div>
                 </div>
 
-                {isBlockImproductive(block) && (
-                  <>
-                    <Separator />
-                    <div className="space-y-4">
-                      <h3 className="font-medium">Fase Improductiva (opcional)</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Label htmlFor={`cumulativeOutlays-${index}`}>Gastos Acumulados a la Fecha (COP)</Label>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Total de gastos acumulados desde la siembra hasta la fecha de valuación</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
-                          <Input
-                            id={`cumulativeOutlays-${index}`}
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            placeholder="0.00"
-                            value={block.cumulativeOutlaysToDateCop}
-                            onChange={(e) => updateBlock(index, "cumulativeOutlaysToDateCop", e.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Label htmlFor={`inpFactor-${index}`}>Factor INP</Label>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Factor de Indemnización por No Producción. Rango típico: 0.30 - 0.50</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
-                          <Input
-                            id={`inpFactor-${index}`}
-                            type="number"
-                            step="0.01"
-                            min="0.30"
-                            max="0.50"
-                            placeholder="0.40"
-                            value={block.inpFactor}
-                            onChange={(e) => updateBlock(index, "inpFactor", e.target.value)}
-                          />
-                          <p className="text-sm text-muted-foreground">Rango: 0.30 - 0.50 (por defecto: 0.40)</p>
-                        </div>
-                      </div>
+                <Separator />
+
+                <div className="space-y-4">
+                  <h3 className="font-medium">Condiciones del predio</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor={`water-${index}`}>Disponibilidad de Agua</Label>
+                      <SelectField
+                        id={`water-${index}`}
+                        value={block.waterAvailability}
+                        onChange={(value) => updateBlock(index, "waterAvailability", value)}
+                        placeholder="Seleccione disponibilidad"
+                        options={(optionsByGroup.water_availability || []).map((option) => ({
+                          value: option.value,
+                          label: option.label,
+                        }))}
+                      />
                     </div>
-                  </>
-                )}
+                    <div className="space-y-2">
+                      <Label htmlFor={`rainfallRegime-${index}`}>Régimen de Lluvias</Label>
+                      <SelectField
+                        id={`rainfallRegime-${index}`}
+                        value={block.rainfallRegime}
+                        onChange={(value) => updateBlock(index, "rainfallRegime", value)}
+                        placeholder="Seleccione régimen"
+                        options={(optionsByGroup.rainfall_regime || []).map((option) => ({
+                          value: option.value,
+                          label: option.label,
+                        }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor={`precipitation-${index}`}>Precipitación Anual (mm/año)</Label>
+                      <NumericInput
+                        id={`precipitation-${index}`}
+                        placeholder="1.200"
+                        value={block.annualPrecipitationMm}
+                        onValueChange={(value) => updateBlock(index, "annualPrecipitationMm", value)}
+                      />
+                    </div>
+                  </div>
+                </div>
 
                 <Separator />
 
                 <div className="space-y-4">
-                  <h3 className="font-medium flex items-center gap-2">
-                    <FileTextIcon className="h-4 w-4" />
-                    Información Adicional
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <h3 className="font-medium">Información económica</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor={`discountRate-${index}`}>Tasa de Descuento DNP</Label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Tasa de descuento oficial del Departamento Nacional de Planeación para valuaciones</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <Input
-                        id={`discountRate-${index}`}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="1"
-                        placeholder="0.12"
-                        value={block.dnpDiscountRate}
-                        onChange={(e) => updateBlock(index, "dnpDiscountRate", e.target.value)}
+                      <Label htmlFor={`landRent-${index}`}>Costo de Arriendo (COP/ha/año)</Label>
+                      <NumericInput
+                        id={`landRent-${index}`}
+                        placeholder="500.000"
+                        disabled={rentDisabled}
+                        aria-invalid={Boolean(errors[index]?.landRentCopHaYear)}
+                        value={block.landRentCopHaYear}
+                        onValueChange={(value) => updateBlock(index, "landRentCopHaYear", value)}
+                        className={errors[index]?.landRentCopHaYear ? "border-destructive" : ""}
                       />
-                      <p className="text-sm text-muted-foreground">Ingrese como decimal (ej: 0.12 para 12%)</p>
+                      {errors[index]?.landRentCopHaYear ? (
+                        <p className="text-sm text-destructive">{errors[index]?.landRentCopHaYear}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          {rentDisabled
+                            ? "Quite el valor del suelo para registrar arriendo."
+                            : "Registre arriendo o valor del suelo, no ambos."}
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor={`notes-${index}`}>Notas</Label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <InfoIcon className="h-4 w-4 text-muted-foreground" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Observaciones especiales: replantaciones, enfermedades, condiciones inusuales, etc.</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <Textarea
-                        id={`notes-${index}`}
-                        placeholder="Condiciones inusuales, replantaciones, enfermedades, etc."
-                        value={block.notes}
-                        onChange={(e) => updateBlock(index, "notes", e.target.value)}
-                        rows={3}
+                      <Label htmlFor={`jornal-${index}`}>Costo del Jornal (COP/jornal)</Label>
+                      <NumericInput
+                        id={`jornal-${index}`}
+                        placeholder="60.000"
+                        value={block.jornalCostCop}
+                        onValueChange={(value) => updateBlock(index, "jornalCostCop", value)}
                       />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor={`soilValue-${index}`}>Valor del Suelo (COP/ha)</Label>
+                      <NumericInput
+                        id={`soilValue-${index}`}
+                        placeholder="30.000.000"
+                        disabled={soilDisabled}
+                        aria-invalid={Boolean(errors[index]?.soilValueCopHa)}
+                        value={block.soilValueCopHa}
+                        onValueChange={(value) => updateBlock(index, "soilValueCopHa", value)}
+                        className={errors[index]?.soilValueCopHa ? "border-destructive" : ""}
+                      />
+                      {errors[index]?.soilValueCopHa ? (
+                        <p className="text-sm text-destructive">{errors[index]?.soilValueCopHa}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          {soilDisabled
+                            ? "Quite el costo de arriendo para registrar valor del suelo."
+                            : "Registre arriendo o valor del suelo, no ambos."}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor={`commercialPrice-${index}`}>Precio de Comercialización (COP/kg)</Label>
+                      <NumericInput
+                        id={`commercialPrice-${index}`}
+                        required
+                        aria-invalid={Boolean(errors[index]?.commercialPriceCopKg)}
+                        placeholder="4.000"
+                        value={block.commercialPriceCopKg}
+                        onValueChange={(value) => updateBlock(index, "commercialPriceCopKg", value)}
+                        className={errors[index]?.commercialPriceCopKg ? "border-destructive" : ""}
+                      />
+                      {errors[index]?.commercialPriceCopKg ? (
+                        <p className="text-sm text-destructive">{errors[index]?.commercialPriceCopKg}</p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
               </CardContent>
             </Card>
-          ))}
+          )
+        })}
 
-          <div className="flex justify-between items-center">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={addBlock}
-              className="flex items-center gap-2 bg-transparent"
-            >
-              <PlusIcon className="h-4 w-4" />
-              Agregar Otro Cultivo/Lote
-            </Button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <Button type="button" variant="outline" onClick={addBlock} className="flex w-full items-center gap-2 bg-transparent sm:w-auto">
+            <PlusIcon className="h-4 w-4" />
+            Agregar Cultivo/Lote
+          </Button>
 
-            <div className="flex gap-4">
-              <Button type="button" variant="outline">
-                Guardar Borrador
-              </Button>
-              <Button type="submit" disabled={isLoading} className="min-w-32">
-                {isLoading ? "Procesando..." : "Calcular VPN"}
-              </Button>
-            </div>
-          </div>
-        </form>
-      </div>
-    </TooltipProvider>
+          <Button type="submit" disabled={isLoading} className="w-full sm:w-auto sm:min-w-32">
+            {isLoading ? "Guardando..." : submitLabel}
+          </Button>
+        </div>
+      </form>
+    </div>
   )
 }

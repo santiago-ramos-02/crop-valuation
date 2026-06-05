@@ -28,9 +28,6 @@ export default function Page() {
       const { error } = await supabase.auth.signInWithPassword({
         email,
         password,
-        options: {
-          emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || `${window.location.origin}/dashboard`, // redirect to dashboard instead of protected
-        },
       })
       if (error) throw error
       router.push("/dashboard") // redirect to dashboard

@@ -5,6 +5,10 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { LeafIcon, CalculatorIcon, FileTextIcon, PlusIcon, LayoutDashboardIcon } from "lucide-react"
 import { Header } from "@/components/header"
 
+function startNewValuation() {
+  window.location.href = `/valuation/new?fresh=${Date.now()}`
+}
+
 export default function HomePage() {
   return (
     <div className="min-h-screen bg-background">
@@ -26,7 +30,7 @@ export default function HomePage() {
             <div className="flex justify-center gap-4 pt-4">
               <Button
                 size="lg"
-                onClick={() => (window.location.href = "/valuation/new")}
+                onClick={startNewValuation}
                 className="bg-emerald-600 hover:bg-emerald-700"
               >
                 <PlusIcon className="h-5 w-5 mr-2" />

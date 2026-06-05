@@ -3,436 +3,412 @@
 import type React from "react"
 
 import { useEffect, useMemo, useState } from "react"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { NumericInput } from "@/components/ui/numeric-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { CalendarIcon, MapPinIcon, UserIcon, RulerIcon, HelpCircle } from "lucide-react"
+import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
 import type { Database } from "@/types/database"
-import { CreatableCombobox } from "@/components/creatable-combobox"
 
-interface ParcelHeaderData {
+type Departamento = Database["public"]["Tables"]["departamentos"]["Row"]
+type Municipio = Database["public"]["Tables"]["municipios"]["Row"]
+type LookupOption = Database["public"]["Tables"]["lookup_options"]["Row"]
+
+export interface ParcelHeaderData {
   valuationAsOfDate: string
   parcelId: string
-  operatorName: string
-  departamento: string
-  municipio: string
+  departamentoId: string
+  municipioId: string
   vereda: string
-  region: string // Keep for backward compatibility
+  latitude: string
+  longitude: string
+  climateType: string
+  temperatureRange: string
+  altitudeRange: string
+  aptitudeUpraSipra: string
+  slopePercent: string
+  agrologicClass: string
+  altitudeM: string
   totalParcelAreaHa: string
+  discountRateMethod: string
+  discountRateEa: string
 }
 
 interface ParcelHeaderFormProps {
   onSubmit: (data: ParcelHeaderData) => void
+  onChange?: (data: ParcelHeaderData) => void
   initialData?: Partial<ParcelHeaderData>
   isLoading?: boolean
 }
 
+const today = () => new Date().toISOString().slice(0, 10)
+const defaultParcelId = () => `VAL-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`
+const defaultDiscountRateMethod = "Finagro"
+const defaultDiscountRateEa = "0.08462342102763798"
 
-export function ParcelHeaderForm({ onSubmit, initialData, isLoading = false }: Readonly<ParcelHeaderFormProps>) {
+function optionGroups(options: LookupOption[]) {
+  return options.reduce<Record<string, LookupOption[]>>((groups, option) => {
+    groups[option.group_key] = groups[option.group_key] || []
+    groups[option.group_key].push(option)
+    return groups
+  }, {})
+}
+
+function metadataText(option: LookupOption | undefined, key: string) {
+  const metadata = option?.metadata
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return ""
+  const value = metadata[key]
+  return typeof value === "string" || typeof value === "number" ? String(value) : ""
+}
+
+function SelectField({
+  id,
+  value,
+  onChange,
+  options,
+  placeholder,
+  className,
+  disabled,
+  required,
+  invalid,
+}: Readonly<{
+  id: string
+  value: string
+  onChange: (value: string) => void
+  options: Array<{ value: string; label: string }>
+  placeholder: string
+  className?: string
+  disabled?: boolean
+  required?: boolean
+  invalid?: boolean
+}>) {
+  return (
+    <Select value={value} onValueChange={onChange} disabled={disabled}>
+      <SelectTrigger
+        id={id}
+        aria-required={required || undefined}
+        aria-invalid={invalid || undefined}
+        className={`w-full ${className || ""}`}
+      >
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = false }: Readonly<ParcelHeaderFormProps>) {
+  const supabase = useMemo(() => createClient(), [])
+  const [departamentos, setDepartamentos] = useState<Departamento[]>([])
+  const [municipios, setMunicipios] = useState<Municipio[]>([])
+  const [lookupOptions, setLookupOptions] = useState<LookupOption[]>([])
+  const [errors, setErrors] = useState<Partial<Record<keyof ParcelHeaderData, string>>>({})
+
   const [formData, setFormData] = useState<ParcelHeaderData>({
-    valuationAsOfDate: initialData?.valuationAsOfDate || "",
-    parcelId: initialData?.parcelId || "",
-    operatorName: initialData?.operatorName || "",
-    departamento: initialData?.departamento || "",
-    municipio: initialData?.municipio || "",
+    valuationAsOfDate: initialData?.valuationAsOfDate || today(),
+    parcelId: initialData?.parcelId || defaultParcelId(),
+    departamentoId: initialData?.departamentoId || "",
+    municipioId: initialData?.municipioId || "",
     vereda: initialData?.vereda || "",
-    region: initialData?.region || "", // Keep for backward compatibility
+    latitude: initialData?.latitude || "",
+    longitude: initialData?.longitude || "",
+    climateType: initialData?.climateType || "",
+    temperatureRange: initialData?.temperatureRange || "",
+    altitudeRange: initialData?.altitudeRange || "",
+    aptitudeUpraSipra: initialData?.aptitudeUpraSipra || "",
+    slopePercent: initialData?.slopePercent || "",
+    agrologicClass: initialData?.agrologicClass || "",
+    altitudeM: initialData?.altitudeM || "",
     totalParcelAreaHa: initialData?.totalParcelAreaHa || "",
+    discountRateMethod: initialData?.discountRateMethod || defaultDiscountRateMethod,
+    discountRateEa: initialData?.discountRateEa || defaultDiscountRateEa,
   })
 
-  const [errors, setErrors] = useState<Partial<ParcelHeaderData>>({})
-  // Using CreatableCombobox for parcel and operator selection/creation
-  const [departamentos, setDepartamentos] = useState<Database["public"]["Tables"]["departamentos"]["Row"][]>([])
-  const [municipios, setMunicipios] = useState<Database["public"]["Tables"]["municipios"]["Row"][]>([])
-  const [filteredMunicipios, setFilteredMunicipios] = useState<Database["public"]["Tables"]["municipios"]["Row"][]>([])
-  const [parcels, setParcels] = useState<
-    Pick<
-      Database["public"]["Tables"]["parcels"]["Row"],
-      "id" | "parcel_id" | "region" | "operator_name" | "departamento" | "municipio" | "vereda"
-    >[]
-  >([])
-  const supabase = createClient()
+  useEffect(() => {
+    async function loadCatalogs() {
+      const [departamentosRes, municipiosRes, lookupRes] = await Promise.all([
+        supabase.from("departamentos").select("*").order("name").returns<Departamento[]>(),
+        supabase.from("municipios").select("*").order("name").returns<Municipio[]>(),
+        supabase
+          .from("lookup_options")
+          .select("*")
+          .eq("active", true)
+          .order("group_key")
+          .order("line_order")
+          .returns<LookupOption[]>(),
+      ])
+
+      setDepartamentos((departamentosRes.data || []).filter((departamento) => departamento.active !== false))
+      setMunicipios((municipiosRes.data || []).filter((municipio) => municipio.active !== false))
+      setLookupOptions(lookupRes.data || [])
+    }
+
+    loadCatalogs()
+  }, [supabase])
 
   useEffect(() => {
-    ;(async () => {
-      // Fetch departamentos
-      const { data: depts } = await supabase
-        .from("departamentos")
-        .select("*")
-        .returns<Database["public"]["Tables"]["departamentos"]["Row"][]>()
-      setDepartamentos((depts || []).filter((d) => d.active !== false))
+    onChange?.(formData)
+  }, [formData, onChange])
 
-      // Fetch municipios
-      const { data: muns } = await supabase
-        .from("municipios")
-        .select("*")
-        .returns<Database["public"]["Tables"]["municipios"]["Row"][]>()
-      setMunicipios((muns || []).filter((m) => m.active !== false))
+  const filteredMunicipios = useMemo(
+    () => municipios.filter((municipio) => municipio.departamento_id === formData.departamentoId),
+    [formData.departamentoId, municipios],
+  )
 
-      const { data: pcs } = await supabase
-        .from("parcels")
-        .select("id, parcel_id, region, operator_name, departamento, municipio, vereda")
-        .order("created_at", { ascending: false })
-        .returns<
-          Pick<
-            Database["public"]["Tables"]["parcels"]["Row"],
-            "id" | "parcel_id" | "region" | "operator_name" | "departamento" | "municipio" | "vereda"
-          >[]
-        >()
-      setParcels(pcs || [])
-    })()
-  }, [])
-
-  // Filter municipios based on selected departamento
-  useEffect(() => {
-    if (formData.departamento) {
-      const filtered = municipios.filter((m) => m.departamento_id === formData.departamento)
-      setFilteredMunicipios(filtered)
-    } else {
-      setFilteredMunicipios([])
-    }
-  }, [formData.departamento, municipios])
-
-  const existingOperators = useMemo(() => {
-    const names = new Set<string>()
-    for (const p of parcels) {
-      if (p.operator_name) names.add(p.operator_name)
-    }
-    return Array.from(names).sort((a, b) => a.localeCompare(b))
-  }, [parcels])
-
-  const validateForm = (): boolean => {
-    const newErrors: Partial<ParcelHeaderData> = {}
-
-    if (!formData.valuationAsOfDate) {
-      newErrors.valuationAsOfDate = "La fecha de valoración es requerida"
-    }
-
-    if (!formData.parcelId.trim()) {
-      newErrors.parcelId = "El ID del predio es requerido"
-    }
-
-    if (!formData.departamento) {
-      newErrors.departamento = "El departamento es requerido"
-    }
-
-    if (!formData.municipio) {
-      newErrors.municipio = "El municipio es requerido"
-    }
-
-    if (!formData.totalParcelAreaHa) {
-      newErrors.totalParcelAreaHa = "El área total de la parcela es requerida"
-    } else {
-      const area = Number.parseFloat(formData.totalParcelAreaHa)
-      if (isNaN(area) || area < 0) {
-        newErrors.totalParcelAreaHa = "El área debe ser un número positivo"
-      }
-    }
-
-    setErrors(newErrors)
-    return Object.keys(newErrors).length === 0
-  }
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (validateForm()) {
-      onSubmit(formData)
-    }
-  }
+  const optionsByGroup = useMemo(() => optionGroups(lookupOptions), [lookupOptions])
 
   const handleInputChange = (field: keyof ParcelHeaderData, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }))
-    // Clear error when user starts typing
+    setFormData((current) => {
+      const next = { ...current, [field]: value }
+      if (field === "departamentoId") {
+        next.municipioId = ""
+        next.vereda = ""
+        next.latitude = ""
+        next.longitude = ""
+      }
+      if (field === "municipioId") {
+        const selectedMunicipio = municipios.find((municipio) => municipio.id === value)
+        next.latitude = selectedMunicipio?.latitude ? String(selectedMunicipio.latitude) : ""
+        next.longitude = selectedMunicipio?.longitude ? String(selectedMunicipio.longitude) : ""
+      }
+      if (field === "climateType") {
+        const selectedClimate = lookupOptions.find((option) => option.group_key === "climate_type" && option.value === value)
+        next.temperatureRange = metadataText(selectedClimate, "temperature_range")
+        next.altitudeRange = metadataText(selectedClimate, "altitude_range")
+      }
+      if (field === "discountRateMethod") {
+        const selectedRate = lookupOptions.find((option) => option.group_key === "discount_rate_method" && option.value === value)
+        next.discountRateEa = metadataText(selectedRate, "rate_ea") || next.discountRateEa
+      }
+      return next
+    })
+
     if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: undefined }))
+      setErrors((current) => ({ ...current, [field]: undefined }))
     }
+  }
+
+  const validateForm = () => {
+    const nextErrors: Partial<Record<keyof ParcelHeaderData, string>> = {}
+
+    if (!formData.valuationAsOfDate) nextErrors.valuationAsOfDate = "La fecha de valoración es requerida"
+    if (!formData.parcelId.trim()) nextErrors.parcelId = "El identificador del predio es requerido"
+    if (!formData.departamentoId) nextErrors.departamentoId = "El departamento es requerido"
+    if (!formData.municipioId) nextErrors.municipioId = "El municipio es requerido"
+
+    if (formData.totalParcelAreaHa) {
+      const area = parseLocalizedNumberInput(formData.totalParcelAreaHa)
+      if (area === null || area <= 0) nextErrors.totalParcelAreaHa = "El área debe ser un número positivo"
+    }
+    if (!formData.discountRateMethod) nextErrors.discountRateMethod = "El método de tasa es requerido"
+    if (!formData.discountRateEa.trim()) {
+      nextErrors.discountRateEa = "La tasa de descuento es requerida"
+    } else {
+      const rate = parseLocalizedNumberInput(formData.discountRateEa)
+      if (rate === null || rate < 0) nextErrors.discountRateEa = "La tasa debe ser un número mayor o igual a cero"
+    }
+
+    setErrors(nextErrors)
+    return Object.keys(nextErrors).length === 0
+  }
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault()
+    if (validateForm()) onSubmit(formData)
+  }
+
+  const handleClear = () => {
+    setFormData({
+      valuationAsOfDate: today(),
+      parcelId: defaultParcelId(),
+      departamentoId: "",
+      municipioId: "",
+      vereda: "",
+      latitude: "",
+      longitude: "",
+      climateType: "",
+      temperatureRange: "",
+      altitudeRange: "",
+      aptitudeUpraSipra: "",
+      slopePercent: "",
+      agrologicClass: "",
+      altitudeM: "",
+      totalParcelAreaHa: "",
+      discountRateMethod: defaultDiscountRateMethod,
+      discountRateEa: defaultDiscountRateEa,
+    })
+    setErrors({})
   }
 
   return (
-    <TooltipProvider>
-      <Card className="w-full max-w-2xl mx-auto">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-semibold text-balance">Información del Predio</CardTitle>
-          <CardDescription className="text-pretty">
-            Ingrese la información básica para esta valoración de predio agrícola
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <Card className="w-full max-w-4xl mx-auto">
+      <CardHeader className="space-y-1">
+        <CardTitle className="text-2xl font-semibold text-balance">Información del Predio</CardTitle>
+        <CardDescription className="text-pretty">
+          Ingrese la ubicación y características agrológicas del predio
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-6" noValidate>
+          <div className="space-y-4">
+            <h3 className="font-medium">Datos generales</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="valuationDate" className="flex items-center gap-2">
-                  <CalendarIcon className="h-4 w-4 text-muted-foreground" />
-                  Fecha de Valoración *
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>
-                        Fecha en la cual se realiza la valoración de la parcela. Generalmente es la fecha actual o la
-                        fecha de corte del análisis.
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </Label>
-                <Input
-                  id="valuationDate"
-                  type="date"
-                  value={formData.valuationAsOfDate}
-                  onChange={(e) => handleInputChange("valuationAsOfDate", e.target.value)}
-                  className={errors.valuationAsOfDate ? "border-destructive" : ""}
+                <Label htmlFor="departamento">Departamento *</Label>
+                <SelectField
+                  id="departamento"
+                  value={formData.departamentoId}
+                  onChange={(value) => handleInputChange("departamentoId", value)}
+                  className={errors.departamentoId ? "border-destructive" : ""}
                   required
+                  invalid={Boolean(errors.departamentoId)}
+                  placeholder="Seleccione departamento"
+                  options={departamentos.map((departamento) => ({ value: departamento.id, label: departamento.name }))}
                 />
-                {errors.valuationAsOfDate && <p className="text-sm text-destructive">{errors.valuationAsOfDate}</p>}
+                {errors.departamentoId ? <p className="text-sm text-destructive">{errors.departamentoId}</p> : null}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="parcelId" className="flex items-center gap-2">
-                  <MapPinIcon className="h-4 w-4 text-muted-foreground" />
-                  Predio *
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>
-                        Seleccione un predio existente o cree uno nuevo. El ID debe corresponder a la cédula catastral
-                        del IGAC o un identificador interno único.
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </Label>
-                <CreatableCombobox
-                  value={formData.parcelId}
-                  onChange={(val) => handleInputChange("parcelId", val)}
-                  fetchOptions={async (q) => {
-                    const { data } = await supabase
-                      .from("parcels")
-                      .select("id, parcel_id, region, operator_name, vereda")
-                      .ilike("parcel_id", `%${q}%`)
-                      .order("created_at", { ascending: false })
-                      .returns<
-                        Pick<
-                          Database["public"]["Tables"]["parcels"]["Row"],
-                          "id" | "parcel_id" | "region" | "operator_name" | "vereda"
-                        >[]
-                      >()
-                    return (data || []).map((p) => ({
-                      id: p.id,
-                      label: p.parcel_id,
-                      meta: [p.operator_name, p.region, p.vereda].filter(Boolean).join(" — "),
-                    }))
-                  }}
-                  onSelectOption={(opt) => {
-                    const selectedParcel = parcels.find((p) => p.parcel_id === opt.label)
-                    if (selectedParcel) {
-                      if (selectedParcel.departamento) {
-                        handleInputChange("departamento", selectedParcel.departamento)
-                      }
-                      if (selectedParcel.municipio) {
-                        handleInputChange("municipio", selectedParcel.municipio)
-                      }
-                    if (selectedParcel.vereda) {
-                      handleInputChange("vereda", selectedParcel.vereda)
-                    }
-                      handleInputChange("region", selectedParcel.region || "")
-                      if (selectedParcel.operator_name) {
-                        handleInputChange("operatorName", selectedParcel.operator_name)
-                      }
-                    }
-                  }}
-                  placeholder={parcels.length ? "Buscar o crear predio..." : "Crear predio o buscar"}
-                  emptyHint={"Sin coincidencias"}
-                  className={`w-full justify-between ${errors.parcelId ? "border-destructive" : ""}`}
+                <Label htmlFor="municipio">Municipio *</Label>
+                <SelectField
+                  id="municipio"
+                  value={formData.municipioId}
+                  onChange={(value) => handleInputChange("municipioId", value)}
+                  className={errors.municipioId ? "border-destructive" : ""}
+                  required
+                  invalid={Boolean(errors.municipioId)}
+                  placeholder="Seleccione municipio"
+                  disabled={!formData.departamentoId}
+                  options={filteredMunicipios.map((municipio) => ({ value: municipio.id, label: municipio.name }))}
                 />
-                {errors.parcelId && <p className="text-sm text-destructive">{errors.parcelId}</p>}
+                {errors.municipioId ? <p className="text-sm text-destructive">{errors.municipioId}</p> : null}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="vereda">Vereda</Label>
+                <Input
+                  id="vereda"
+                  placeholder="Vereda"
+                  value={formData.vereda}
+                  onChange={(event) => handleInputChange("vereda", event.target.value)}
+                />
               </div>
             </div>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-4">
+            <h3 className="font-medium">Características agrológicas</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="operatorName" className="flex items-center gap-2">
-                  <UserIcon className="h-4 w-4 text-muted-foreground" />
-                  Nombre del Operador
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Persona u organización que proporciona los datos o administra la parcela. Campo opcional.</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </Label>
-                <CreatableCombobox
-                  value={formData.operatorName}
-                  onChange={(val) => handleInputChange("operatorName", val)}
-                  fetchOptions={async (q) => {
-                    const term = q.trim().toLowerCase()
-                    const opts = existingOperators
-                      .filter((o) => o.toLowerCase().includes(term))
-                      .slice(0, 20)
-                      .map((o) => ({ id: o, label: o }))
-                    return Promise.resolve(opts)
-                  }}
-                  placeholder={existingOperators.length ? "Buscar o crear operador..." : "Crear operador o buscar"}
-                  emptyHint={"Sin coincidencias"}
-                  className="w-full justify-between"
+                <Label htmlFor="climateType">Tipo de Clima</Label>
+                <SelectField
+                  id="climateType"
+                  value={formData.climateType}
+                  onChange={(value) => handleInputChange("climateType", value)}
+                  placeholder="Seleccione tipo de clima"
+                  options={(optionsByGroup.climate_type || []).map((option) => ({ value: option.value, label: option.label }))}
                 />
               </div>
 
               <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <MapPinIcon className="h-4 w-4" />
-                  Ubicación del Predio
-                </Label>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="departamento" className="flex items-center gap-2">
-                      Departamento *
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>
-                            Departamento donde se encuentra ubicada la parcela. Esto afecta los parámetros de
-                            valoración y curvas de rendimiento.
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </Label>
-                    <Select value={formData.departamento} onValueChange={(value) => {
-                      handleInputChange("departamento", value)
-                      // Clear municipio when departamento changes
-                      if (value !== formData.departamento) {
-                        handleInputChange("municipio", "")
-                        handleInputChange("vereda", "")
-                      }
-                    }} required>
-                      <SelectTrigger className={`w-full ${errors.departamento ? "border-destructive" : ""}`}>
-                        <SelectValue placeholder="Seleccionar departamento" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {departamentos.map((departamento) => (
-                          <SelectItem key={departamento.id} value={departamento.id}>
-                            {departamento.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {errors.departamento && <p className="text-sm text-destructive">{errors.departamento}</p>}
-                  </div>
+                <Label htmlFor="aptitude">Aptitud UPRA/SIPRA</Label>
+                <Input
+                  id="aptitude"
+                  placeholder="Aptitud"
+                  value={formData.aptitudeUpraSipra}
+                  onChange={(event) => handleInputChange("aptitudeUpraSipra", event.target.value)}
+                />
+              </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="municipio" className="flex items-center gap-2">
-                      Municipio *
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>
-                            Municipio donde se encuentra ubicada la parcela. Seleccione primero un departamento.
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </Label>
-                    <Select value={formData.municipio} onValueChange={(value) => handleInputChange("municipio", value)} required>
-                      <SelectTrigger className={`w-full ${errors.municipio ? "border-destructive" : ""}`}>
-                        <SelectValue placeholder={formData.departamento ? "Seleccionar municipio" : "Seleccione departamento primero"} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {filteredMunicipios.map((municipio) => (
-                          <SelectItem key={municipio.id} value={municipio.id}>
-                            {municipio.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {errors.municipio && <p className="text-sm text-destructive">{errors.municipio}</p>}
-                  </div>
-                </div>
-                <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="vereda" className="flex items-center gap-2">
-                    <MapPinIcon className="h-4 w-4 text-muted-foreground" />
-                    Vereda / Corregimiento
-                  </Label>
-                  <Input
-                    id="vereda"
-                    placeholder="Ingrese la vereda o corregimiento"
-                    value={formData.vereda}
-                    onChange={(e) => handleInputChange("vereda", e.target.value)}
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="slope">Pendiente del Predio (%)</Label>
+                <NumericInput
+                  id="slope"
+                  placeholder="7"
+                  value={formData.slopePercent}
+                  onValueChange={(value) => handleInputChange("slopePercent", value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="agrologicClass">Clase Agrológica</Label>
+                <SelectField
+                  id="agrologicClass"
+                  value={formData.agrologicClass}
+                  onChange={(value) => handleInputChange("agrologicClass", value)}
+                  placeholder="Seleccione clase"
+                  options={(optionsByGroup.agrologic_class || []).map((option) => ({ value: option.value, label: option.label }))}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="altitudeM">Altitud (msnm)</Label>
+                <NumericInput
+                  id="altitudeM"
+                  placeholder="1.200"
+                  value={formData.altitudeM}
+                  onValueChange={(value) => handleInputChange("altitudeM", value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="discountRateMethod">Método de tasa de descuento *</Label>
+                <SelectField
+                  id="discountRateMethod"
+                  value={formData.discountRateMethod}
+                  onChange={(value) => handleInputChange("discountRateMethod", value)}
+                  className={errors.discountRateMethod ? "border-destructive" : ""}
+                  required
+                  invalid={Boolean(errors.discountRateMethod)}
+                  placeholder="Seleccione método"
+                  options={(optionsByGroup.discount_rate_method || []).map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  }))}
+                />
+                {errors.discountRateMethod ? <p className="text-sm text-destructive">{errors.discountRateMethod}</p> : null}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="discountRateEa">Tasa de descuento (EA, decimal) *</Label>
+                <NumericInput
+                  id="discountRateEa"
+                  placeholder="0,08462342"
+                  required
+                  aria-invalid={Boolean(errors.discountRateEa)}
+                  value={formData.discountRateEa}
+                  onValueChange={(value) => handleInputChange("discountRateEa", value)}
+                  className={errors.discountRateEa ? "border-destructive" : ""}
+                />
+                {errors.discountRateEa ? (
+                  <p className="text-sm text-destructive">{errors.discountRateEa}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Ej.: 0.0846 equivale a 8,46 % EA.</p>
+                )}
               </div>
             </div>
+          </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="totalArea" className="flex items-center gap-2">
-                <RulerIcon className="h-4 w-4 text-muted-foreground" />
-                Área Total del Predio (hectáreas) *
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>
-                      Área total del predio en hectáreas. Debe incluir todas las áreas plantadas y no plantadas
-                      dentro de los límites de la propiedad.
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </Label>
-              <Input
-                id="totalArea"
-                type="number"
-                step="0.0001"
-                min="0"
-                placeholder="0.0000"
-                value={formData.totalParcelAreaHa}
-                onChange={(e) => handleInputChange("totalParcelAreaHa", e.target.value)}
-                className={errors.totalParcelAreaHa ? "border-destructive" : ""}
-                required
-              />
-              {errors.totalParcelAreaHa && <p className="text-sm text-destructive">{errors.totalParcelAreaHa}</p>}
-              <p className="text-sm text-muted-foreground">
-                Ingrese el área total de la parcela en hectáreas (ej: 12.5000)
-              </p>
-            </div>
-
-            <div className="flex justify-end gap-4 pt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setFormData({
-                    valuationAsOfDate: "",
-                    parcelId: "",
-                    operatorName: "",
-                    departamento: "",
-                    municipio: "",
-                  vereda: "",
-                    region: "",
-                    totalParcelAreaHa: "",
-                  })
-                  setErrors({})
-                  setFilteredMunicipios([])
-                }}
-              >
-                Limpiar Formulario
-              </Button>
-              <Button type="submit" disabled={isLoading} className="min-w-32">
-                {isLoading ? "Guardando..." : "Continuar a Cultivos/Lotes"}
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-    </TooltipProvider>
+          <div className="flex justify-end gap-4 pt-4">
+            <Button type="button" variant="outline" onClick={handleClear}>
+              Limpiar Formulario
+            </Button>
+            <Button type="submit" disabled={isLoading} className="min-w-32">
+              {isLoading ? "Guardando..." : "Continuar a Cultivos/Lotes"}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   )
 }

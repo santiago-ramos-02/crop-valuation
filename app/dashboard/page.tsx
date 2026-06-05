@@ -1,9 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Calendar, Edit, Eye, LayoutDashboard, MapPin, Search, Trash2 } from "lucide-react"
+
+import { Header } from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
@@ -16,290 +18,182 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { LayoutDashboard, Search, Eye, Edit, Trash2, Calendar, MapPin } from "lucide-react"
-import { createBrowserClient } from "@supabase/ssr"
-import type { Database } from "@/types/database"
 import { useToast } from "@/hooks/use-toast"
-import type { ConfidenceTier, ValuationStatus, FilterValue } from "@/types/shared"
-import { Header } from "@/components/header"
+import { createClient } from "@/lib/supabase/client"
+import type { Database } from "@/types/database"
+
+type ValuationCase = Database["public"]["Tables"]["valuation_cases"]["Row"]
+type CropBlock = Database["public"]["Tables"]["crop_blocks"]["Row"]
+type AppraisalResult = Database["public"]["Tables"]["crop_appraisal_results"]["Row"]
+type Departamento = Database["public"]["Tables"]["departamentos"]["Row"]
+type Municipio = Database["public"]["Tables"]["municipios"]["Row"]
+type Crop = Database["public"]["Tables"]["crops"]["Row"]
+type Variety = Database["public"]["Tables"]["varieties"]["Row"]
+
+const dateFormatter = new Intl.DateTimeFormat("es-CO", {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+})
+
+const currencyFormatter = new Intl.NumberFormat("es-CO", {
+  style: "currency",
+  currency: "COP",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+})
 
 interface ValuationSummary {
   id: string
-  parcel_id: string
-  operator_name?: string
-  region: string
-  total_area_ha: number
-  total_value_cop: number
-  confidence_tier: ConfidenceTier
-  valuation_date: string
-  status: ValuationStatus
-  created_at: string
+  caseCode: string
+  location: string
+  crop: string
+  variety: string
+  totalAreaHa: number
+  blockCount: number
+  totalAppraisedCop: number
+  valuationDate: string
+  createdAt: string
+}
+
+function formatDate(dateString: string) {
+  return dateFormatter.format(new Date(dateString))
+}
+
+function toNumber(value: string | null | undefined) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function formatCurrency(amount: number) {
+  return currencyFormatter.format(amount)
+}
+
+function startNewValuation() {
+  window.location.href = `/valuation/new?fresh=${Date.now()}`
 }
 
 export default function DashboardPage() {
+  const supabase = useMemo(() => createClient(), [])
+  const { toast } = useToast()
+
   const [valuations, setValuations] = useState<ValuationSummary[]>([])
   const [searchTerm, setSearchTerm] = useState("")
-  const [filterRegion, setFilterRegion] = useState<FilterValue>("all")
-  const [filterTier, setFilterTier] = useState<FilterValue>("all")
   const [isLoading, setIsLoading] = useState(true)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [valuationToDelete, setValuationToDelete] = useState<string | null>(null)
 
-  const { toast } = useToast()
-
-  const supabase = createBrowserClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
-
-  const transformParcelToSummary = (
-    parcel: Database["public"]["Tables"]["parcels"]["Row"],
-    blocks: Database["public"]["Tables"]["blocks"]["Row"][],
-    results: Database["public"]["Tables"]["valuation_results"]["Row"][],
-  ): ValuationSummary => {
-    const parcelBlocks = blocks.filter((b) => b.parcel_id === parcel.id)
-    const parcelResults = results.filter((r) => parcelBlocks.some((b) => b.id === r.block_id))
-    const totalValue = parcelResults.reduce((sum, r) => sum + Number(r.value_block_cop || 0), 0)
-
-    const confidenceTiers = parcelResults.map((r) => r.confidence_tier)
-    let bestTier: ConfidenceTier = "C"
-    if (confidenceTiers.includes("A" as ConfidenceTier)) {
-      bestTier = "A"
-    } else if (confidenceTiers.includes("B" as ConfidenceTier)) {
-      bestTier = "B"
-    }
-
-    const hasResults = parcelResults.length > 0
-
-    return {
-      id: parcel.id,
-      parcel_id: parcel.parcel_id,
-      operator_name: parcel.operator_name || undefined,
-      region: parcel.region,
-      total_area_ha: Number(parcel.total_parcel_area_ha),
-      total_value_cop: totalValue,
-      confidence_tier: bestTier,
-      valuation_date: parcel.valuation_asof_date,
-      status: hasResults ? "completed" : ("draft" as ValuationStatus),
-      created_at: parcel.created_at || new Date().toISOString(),
-    }
-  }
-
-  useEffect(() => {
-    loadValuations()
-  }, [])
-
-  const loadValuations = async () => {
+  const loadValuations = useCallback(async () => {
+    setIsLoading(true)
     try {
-      type ParcelsRow = Database["public"]["Tables"]["parcels"]["Row"]
-      type BlocksRow = Database["public"]["Tables"]["blocks"]["Row"]
-      type ValuationResultRow = Database["public"]["Tables"]["valuation_results"]["Row"]
+      const [
+        casesRes,
+        departamentosRes,
+        municipiosRes,
+        cropsRes,
+        varietiesRes,
+      ] = await Promise.all([
+        supabase.from("valuation_cases").select("*").order("created_at", { ascending: false }).returns<ValuationCase[]>(),
+        supabase.from("departamentos").select("*").returns<Departamento[]>(),
+        supabase.from("municipios").select("*").returns<Municipio[]>(),
+        supabase.from("crops").select("*").returns<Crop[]>(),
+        supabase.from("varieties").select("*").returns<Variety[]>(),
+      ])
 
-      const { data: parcels, error: parcelsError } = await supabase
-        .from("parcels")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .returns<ParcelsRow[]>()
+      if (casesRes.error) throw casesRes.error
 
-      if (parcelsError) {
-        console.error("Error loading parcels:", parcelsError)
-        setValuations([])
-        return
+      const cases = casesRes.data || []
+      const caseIds = cases.map((valuationCase) => valuationCase.id)
+      const blocksRes = caseIds.length
+        ? await supabase.from("crop_blocks").select("*").in("valuation_case_id", caseIds).returns<CropBlock[]>()
+        : { data: [] as CropBlock[], error: null }
+      if (blocksRes.error) throw blocksRes.error
+
+      const blockIds = (blocksRes.data || []).map((block) => block.id)
+      const appraisalsRes = blockIds.length
+        ? await supabase.from("crop_appraisal_results").select("*").in("crop_block_id", blockIds).returns<AppraisalResult[]>()
+        : { data: [] as AppraisalResult[], error: null }
+      if (appraisalsRes.error) throw appraisalsRes.error
+
+      const departamentos = new Map((departamentosRes.data || []).map((row) => [row.id, row.name]))
+      const municipios = new Map((municipiosRes.data || []).map((row) => [row.id, row.name]))
+      const crops = new Map((cropsRes.data || []).map((row) => [row.id, row.name]))
+      const varieties = new Map((varietiesRes.data || []).map((row) => [row.id, row.name]))
+      const blocksByCase = new Map<string, CropBlock[]>()
+      for (const block of blocksRes.data || []) {
+        blocksByCase.set(block.valuation_case_id, [...(blocksByCase.get(block.valuation_case_id) || []), block])
       }
+      const appraisalsByBlock = new Map((appraisalsRes.data || []).map((row) => [row.crop_block_id, row]))
 
-      const parcelIds = parcels?.map((p) => p.id) || []
-      const { data: blocks, error: blocksError } = await supabase
-        .from("blocks")
-        .select("*")
-        .in("parcel_id", parcelIds)
-        .returns<BlocksRow[]>()
-
-      if (blocksError) {
-        console.error("Error loading blocks:", blocksError)
-      }
-
-      const blockIds = blocks?.map((b) => b.id) || []
-      const { data: results, error: resultsError } = await supabase
-        .from("valuation_results")
-        .select("*")
-        .in("block_id", blockIds)
-        .returns<ValuationResultRow[]>()
-
-      if (resultsError) {
-        console.error("Error loading valuation results:", resultsError)
-      }
-
-      const transformedData: ValuationSummary[] = (parcels || []).map((parcel) =>
-        transformParcelToSummary(parcel, blocks || [], results || []),
+      setValuations(
+        cases.map((valuationCase) => {
+          const caseBlocks = blocksByCase.get(valuationCase.id) || []
+          const firstBlock = caseBlocks[0]
+          const blockAppraisals = caseBlocks.flatMap((block) => {
+            const appraisal = appraisalsByBlock.get(block.id)
+            return appraisal ? [appraisal] : []
+          })
+          const blockAreaHa = caseBlocks.reduce((sum, block) => sum + toNumber(block.crop_area_ha), 0)
+          return {
+            id: valuationCase.id,
+            caseCode: valuationCase.case_code,
+            location: `${departamentos.get(valuationCase.departamento_id) || valuationCase.departamento_id} / ${
+              municipios.get(valuationCase.municipio_id) || valuationCase.municipio_id
+            }`,
+            crop: firstBlock ? crops.get(firstBlock.crop_id) || firstBlock.crop_id : "Sin cultivo",
+            variety: firstBlock ? varieties.get(firstBlock.variety_id) || firstBlock.variety_id : "",
+            totalAreaHa: toNumber(valuationCase.total_parcel_area_ha) || blockAreaHa,
+            blockCount: caseBlocks.length,
+            totalAppraisedCop: blockAppraisals.reduce((sum, appraisal) => sum + toNumber(appraisal.appraised_value_cop), 0),
+            valuationDate: valuationCase.valuation_asof_date,
+            createdAt: valuationCase.created_at || new Date().toISOString(),
+          }
+        }),
       )
-
-      setValuations(transformedData)
     } catch (error) {
       console.error("Error cargando valuaciones:", error)
       setValuations([])
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [supabase])
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("es-CO", {
-      style: "currency",
-      currency: "COP",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount)
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Intl.DateTimeFormat("es-CO", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    }).format(new Date(dateString))
-  }
-
-  const getTierColor = (tier: "A" | "B" | "C") => {
-    switch (tier) {
-      case "A":
-        return "bg-emerald-100 text-emerald-800 border-emerald-200"
-      case "B":
-        return "bg-amber-100 text-amber-800 border-amber-200"
-      case "C":
-        return "bg-red-100 text-red-800 border-red-200"
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "completed":
-        return "bg-green-100 text-green-800"
-      case "draft":
-        return "bg-blue-100 text-blue-800"
-      case "archived":
-        return "bg-gray-100 text-gray-800"
-      default:
-        return "bg-gray-100 text-gray-800"
-    }
-  }
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case "completed":
-        return "Completado"
-      case "draft":
-        return "Borrador"
-      case "archived":
-        return "Archivado"
-      default:
-        return status
-    }
-  }
+  useEffect(() => {
+    loadValuations()
+  }, [loadValuations])
 
   const filteredValuations = valuations.filter((valuation) => {
-    const matchesSearch =
-      valuation.parcel_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      valuation.operator_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      valuation.region.toLowerCase().includes(searchTerm.toLowerCase())
-
-    const matchesRegion = filterRegion === "all" || valuation.region === filterRegion
-    const matchesTier = filterTier === "all" || valuation.confidence_tier === filterTier
-
-    return matchesSearch && matchesRegion && matchesTier
+    const needle = searchTerm.toLowerCase()
+    return (
+      valuation.caseCode.toLowerCase().includes(needle) ||
+      valuation.location.toLowerCase().includes(needle) ||
+      valuation.crop.toLowerCase().includes(needle) ||
+      valuation.variety.toLowerCase().includes(needle)
+    )
   })
 
-  const totalValue = valuations.reduce((sum, v) => sum + v.total_value_cop, 0)
-  const totalArea = valuations.reduce((sum, v) => sum + v.total_area_ha, 0)
-  const avgValuePerHa = totalArea > 0 ? totalValue / totalArea : 0
+  const totalCases = valuations.length
+  const totalArea = valuations.reduce((sum, valuation) => sum + valuation.totalAreaHa, 0)
+  const totalBlocks = valuations.reduce((sum, valuation) => sum + valuation.blockCount, 0)
+  const totalAppraisedCop = valuations.reduce((sum, valuation) => sum + valuation.totalAppraisedCop, 0)
 
-  const handleView = (id: string) => {
-    window.location.href = `/valuation/view/${id}`
-  }
-
-  const handleEdit = (id: string) => {
-    window.location.href = `/valuation/edit/${id}`
-  }
-
-  const handleDelete = async (id: string) => {
-    console.log("Starting deletion process for valuation:", id)
-
+  async function handleDelete(id: string) {
     try {
-      const { data: blocks, error: blocksError } = await supabase.from("blocks").select("id").eq("parcel_id", id)
-
-      if (blocksError) {
-        console.error("Error fetching blocks for deletion:", blocksError)
-        toast({
-          title: "Error al eliminar",
-          description: "No se pudieron obtener los cultivos/lotes",
-          variant: "destructive",
-        })
-        return
-      }
-
-      if (blocks && blocks.length > 0) {
-        const blockIds = blocks.map((b) => b.id)
-        const { error: resultsError } = await supabase.from("valuation_results").delete().in("block_id", blockIds)
-
-        if (resultsError) {
-          console.error("Error deleting valuation results:", resultsError)
-          toast({
-            title: "Error al eliminar",
-            description: "Error al eliminar los resultados de valuación",
-            variant: "destructive",
-          })
-          return
-        }
-        console.log("Deleted valuation results for blocks:", blockIds)
-      }
-
-      const { error: blocksDeleteError } = await supabase.from("blocks").delete().eq("parcel_id", id)
-
-      if (blocksDeleteError) {
-        console.error("Error deleting blocks:", blocksDeleteError)
-        toast({
-          title: "Error al eliminar",
-          description: "Error al eliminar los cultivos/lotes",
-          variant: "destructive",
-        })
-        return
-      }
-      console.log("Deleted blocks for parcel:", id)
-
-      const { error: parcelError } = await supabase.from("parcels").delete().eq("id", id)
-
-      if (parcelError) {
-        console.error("Error deleting parcel:", parcelError)
-        toast({
-          title: "Error al eliminar",
-          description: "Error al eliminar la parcela",
-          variant: "destructive",
-        })
-        return
-      }
-
-      console.log("Successfully deleted parcel:", id)
-
-      setValuations(valuations.filter((v) => v.id !== id))
-      toast({
-        title: "Éxito",
-        description: "Valuación eliminada exitosamente",
-      })
+      const { error } = await supabase.from("valuation_cases").delete().eq("id", id)
+      if (error) throw error
+      setValuations((current) => current.filter((valuation) => valuation.id !== id))
+      toast({ title: "Valuación eliminada", description: "La valuación y sus resultados asociados fueron eliminados." })
     } catch (error) {
-      console.error("Unexpected error during deletion:", error)
+      console.error("Error eliminando valuación:", error)
       toast({
-        title: "Error inesperado",
-        description: "Error inesperado al eliminar la valuación",
+        title: "Error al eliminar",
+        description: "No se pudo eliminar la valuación.",
         variant: "destructive",
       })
     }
   }
 
-  const openDeleteDialog = (id: string) => {
-    setValuationToDelete(id)
-    setDeleteDialogOpen(true)
-  }
-
-  const confirmDelete = () => {
+  function confirmDelete() {
     if (valuationToDelete) {
       handleDelete(valuationToDelete)
       setDeleteDialogOpen(false)
@@ -321,7 +215,7 @@ export default function DashboardPage() {
               <p className="text-gray-600 mt-1">Gestiona y revisa todas tus valuaciones agrícolas</p>
             </div>
             <Button
-              onClick={() => (window.location.href = "/valuation/new")}
+              onClick={startNewValuation}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               Nueva Valuación
@@ -334,183 +228,128 @@ export default function DashboardPage() {
                 <CardTitle className="text-sm font-medium">Total de Valuaciones</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{valuations.length}</div>
+                <div className="text-2xl font-bold">{totalCases}</div>
                 <div className="text-xs text-muted-foreground mt-1">Propiedades evaluadas</div>
               </CardContent>
             </Card>
-
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">VPN Total del Portafolio</CardTitle>
+                <CardTitle className="text-sm font-medium">Área registrada</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">{formatCurrency(totalValue)}</div>
-                <div className="text-xs text-muted-foreground mt-1">Suma de todas las valuaciones</div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Área Total</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{totalArea.toLocaleString()} ha</div>
+                <div className="text-2xl font-bold">{totalArea.toLocaleString("es-CO")} ha</div>
                 <div className="text-xs text-muted-foreground mt-1">Hectáreas bajo evaluación</div>
               </CardContent>
             </Card>
-
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">VPN Promedio/ha</CardTitle>
+                <CardTitle className="text-sm font-medium">Cultivos/Lotes</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">{formatCurrency(avgValuePerHa)}</div>
-                <div className="text-xs text-muted-foreground mt-1">VPN por hectárea</div>
+                <div className="text-2xl font-bold">{totalBlocks}</div>
+                <div className="text-xs text-muted-foreground mt-1">Unidades registradas</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Avalúo final</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-emerald-600">{formatCurrency(totalAppraisedCop)}</div>
+                <div className="text-xs text-muted-foreground mt-1">Valor consolidado</div>
               </CardContent>
             </Card>
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle>Filtros y Búsqueda</CardTitle>
+              <CardTitle>Búsqueda</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col md:flex-row gap-4">
-                <div className="flex-1">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <Input
-                      placeholder="Buscar por parcela, operador o departamento/municipio..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="pl-10"
-                    />
-                  </div>
-                </div>
-                <select
-                  value={filterRegion}
-                  onChange={(e) => setFilterRegion(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="all">Todas las regiones</option>
-                  <option value="Meta">Meta</option>
-                  <option value="Cesar">Cesar</option>
-                  <option value="Santander">Santander</option>
-                  <option value="Magdalena">Magdalena</option>
-                </select>
-                <select
-                  value={filterTier}
-                  onChange={(e) => setFilterTier(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="all">Todos los niveles</option>
-                  <option value="A">Nivel A</option>
-                  <option value="B">Nivel B</option>
-                  <option value="C">Nivel C</option>
-                </select>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Buscar por código, ubicación o cultivo..."
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  className="pl-10"
+                />
               </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Historial de Valuaciones</CardTitle>
+              <CardTitle>Historial</CardTitle>
               <CardDescription>
                 {filteredValuations.length} de {valuations.length} valuaciones
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {(() => {
-                if (isLoading) {
-                  return <div className="text-center py-8">Cargando valuaciones...</div>
-                }
-
-                if (filteredValuations.length === 0) {
-                  return (
-                    <div className="text-center py-8 text-gray-500">
-                      No se encontraron valuaciones que coincidan con los filtros
-                    </div>
-                  )
-                }
-
-                return (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Parcela</TableHead>
-                        <TableHead>Operador</TableHead>
-                        <TableHead>Departamento/Municipio</TableHead>
-                        <TableHead>Área (ha)</TableHead>
-                        <TableHead>VPN Total</TableHead>
-                        <TableHead>Nivel</TableHead>
-                        <TableHead>Estado</TableHead>
-                        <TableHead>Fecha</TableHead>
-                        <TableHead>Acciones</TableHead>
+              {isLoading ? (
+                <div className="py-8 text-center text-sm text-slate-600">Cargando valuaciones...</div>
+              ) : filteredValuations.length === 0 ? (
+                <div className="py-8 text-center text-sm text-slate-600">No hay valuaciones para mostrar.</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Valuación</TableHead>
+                      <TableHead>Ubicación</TableHead>
+                      <TableHead>Cultivo</TableHead>
+                      <TableHead>Área</TableHead>
+                      <TableHead>Avalúo final</TableHead>
+                      <TableHead>Fecha</TableHead>
+                      <TableHead>Acciones</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredValuations.map((valuation) => (
+                      <TableRow key={valuation.id}>
+                        <TableCell className="font-medium">{valuation.caseCode}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <MapPin className="h-3 w-3 text-slate-400" />
+                            {valuation.location}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {valuation.crop} {valuation.variety}
+                        </TableCell>
+                        <TableCell>{valuation.totalAreaHa.toLocaleString("es-CO")} ha</TableCell>
+                        <TableCell className="font-medium text-emerald-700">{formatCurrency(valuation.totalAppraisedCop)}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Calendar className="h-3 w-3 text-slate-400" />
+                            {formatDate(valuation.valuationDate)}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="sm" onClick={() => (window.location.href = `/valuation/view/${valuation.id}`)}>
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => (window.location.href = `/valuation/edit/${valuation.id}`)}>
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-600 hover:text-red-700"
+                              onClick={() => {
+                                setValuationToDelete(valuation.id)
+                                setDeleteDialogOpen(true)
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredValuations.map((valuation) => (
-                        <TableRow key={valuation.id}>
-                          <TableCell className="font-medium">{valuation.parcel_id}</TableCell>
-                          <TableCell>{valuation.operator_name || "N/A"}</TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1">
-                              <MapPin className="h-3 w-3 text-gray-400" />
-                              {valuation.region}
-                            </div>
-                          </TableCell>
-                          <TableCell>{valuation.total_area_ha.toLocaleString()}</TableCell>
-                          <TableCell className="font-medium">{formatCurrency(valuation.total_value_cop)}</TableCell>
-                          <TableCell>
-                            <Badge className={getTierColor(valuation.confidence_tier)} variant="outline">
-                              {valuation.confidence_tier}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge className={getStatusColor(valuation.status)} variant="outline">
-                              {getStatusText(valuation.status)}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3 text-gray-400" />
-                              {formatDate(valuation.valuation_date)}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleView(valuation.id)}
-                                className="h-8 w-8 p-0"
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEdit(valuation.id)}
-                                className="h-8 w-8 p-0"
-                              >
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => openDeleteDialog(valuation.id)}
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )
-              })()}
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -519,9 +358,9 @@ export default function DashboardPage() {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>¿Confirmar eliminación?</AlertDialogTitle>
+            <AlertDialogTitle>Eliminar valuación</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción no se puede deshacer. Se eliminará permanentemente la valuación y todos sus datos asociados.
+              Esta acción eliminará la valuación, el lote y los resultados asociados.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
