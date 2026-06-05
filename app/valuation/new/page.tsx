@@ -438,6 +438,7 @@ export default function NewValuationPage() {
               onChange={setBlockData}
               initialBlocks={blockData || undefined}
               isLoading={isSavingValuation}
+              municipioId={parcelData?.municipioId}
               totalParcelAreaHa={parcelData ? (parseLocalizedNumberInput(parcelData.totalParcelAreaHa) ?? undefined) : undefined}
             />
           </div>

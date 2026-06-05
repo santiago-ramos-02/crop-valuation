@@ -1,32 +1,33 @@
 "use client"
 
-import { useCallback, useMemo, useState } from "react"
-import { SaveIcon } from "lucide-react"
+import { useMemo, useState } from "react"
+import { PencilIcon } from "lucide-react"
 import type { SupabaseClient } from "@supabase/supabase-js"
 
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { NumericInput } from "@/components/ui/numeric-input"
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
   buildCropAppraisalAnnualFlowInserts,
   buildCropAppraisalResultInsert,
   calculateCropAppraisal,
+  recalculateCropAppraisalWithCostDeltas,
   type CalculatedCropAppraisal,
 } from "@/lib/appraisal/calculate-crop-appraisal"
-import { buildResolvedInsumoInserts, resolveInsumosWithContext, type ResolvedInsumosResult } from "@/lib/insumos/resolve-insumos"
+import {
+  buildResolvedInsumoInserts,
+  resolveInsumosWithContext,
+  type ResolvedInsumo,
+  type ResolvedInsumosResult,
+} from "@/lib/insumos/resolve-insumos"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
 import type { Database, Json } from "@/types/database"
 import type { BlockData } from "./block-entry-form"
 import type { ParcelHeaderData } from "./parcel-header-form"
 
-interface ValuationCalculatorProps {
-  parcelData: ParcelHeaderData
-  blockData: BlockData[]
-  existingCaseId?: string
-  onSaved?: (caseId: string) => void
-}
+type MunicipioCropAvailability = Database["public"]["Tables"]["municipio_crop_availability"]["Row"]
 
 export interface SavedBlockResolution {
   cropBlockId: string
@@ -48,12 +49,28 @@ interface SaveValuationResult {
   persistedBlocks: SavedBlockResolution[]
 }
 
+interface ValuationResultTablesProps {
+  savedBlocks: SavedBlockResolution[]
+}
+
 interface ValidatedBlock {
   block: BlockData
   ageYears: number
   cropAreaHa: number
   commercialPriceCopKg: number
 }
+
+interface EditableUnitPriceCellProps {
+  disabled: boolean
+  isEditing: boolean
+  isSaving: boolean
+  value: number | null
+  onCancel: () => void
+  onCommit: (value: number) => void
+  onStartEdit: () => void
+}
+
+type UnitPriceOverrides = Record<string, number>
 
 const numberFormatter = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 4 })
 
@@ -62,6 +79,21 @@ const currencyFormatter = new Intl.NumberFormat("es-CO", {
   currency: "COP",
   maximumFractionDigits: 0,
 })
+
+const percentFormatter = new Intl.NumberFormat("es-CO", {
+  style: "percent",
+  maximumFractionDigits: 1,
+})
+
+const unitPriceOverrideSource = "Precio ajustado por perito"
+
+function unitPriceLineKey(cropBlockId: string, templateLineId: string) {
+  return `${cropBlockId}:${templateLineId}`
+}
+
+function cropAvailabilityKey(cropId: string, varietyId: string) {
+  return `${cropId}:${varietyId}`
+}
 
 function numberOrNull(value: string | number | null | undefined): string | null {
   if (value === null || value === undefined) return null
@@ -93,10 +125,180 @@ function formatCurrency(value: number | null | undefined) {
   return currencyFormatter.format(value)
 }
 
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined) return "No disponible"
+  return percentFormatter.format(value)
+}
+
 function formatDisplayLabel(value: string | null | undefined) {
   if (!value) return ""
   const text = value.replaceAll('_', " ").trim().toLocaleLowerCase("es-CO")
   return text ? text.charAt(0).toLocaleUpperCase("es-CO") + text.slice(1) : ""
+}
+
+function metricValueClassName(value: number) {
+  if (value > 0) return "text-emerald-700"
+  if (value < 0) return "text-red-700"
+  return "text-foreground"
+}
+
+function resolvedLineTotal(quantity: number | null, unitPriceCop: number | null) {
+  return quantity !== null && unitPriceCop !== null ? quantity * unitPriceCop : null
+}
+
+function overrideLineUnitPrice(
+  savedBlock: SavedBlockResolution,
+  line: ResolvedInsumo,
+  unitPriceCop: number,
+): SavedBlockResolution {
+  const nextTotalCop = resolvedLineTotal(line.quantity, unitPriceCop)
+  const costDeltaCopHa = (nextTotalCop || 0) - (line.totalCop || 0)
+  const nextLines = savedBlock.result.lines.map((candidate) =>
+    candidate.templateLineId === line.templateLineId
+      ? {
+          ...candidate,
+          unitPriceCop,
+          unitPriceSource: unitPriceOverrideSource,
+          totalCop: nextTotalCop,
+        }
+      : candidate,
+  )
+
+  return {
+    ...savedBlock,
+    result: {
+      ...savedBlock.result,
+      lines: nextLines,
+      missingPriceCount: nextLines.filter((candidate) => candidate.unitPriceCop === null).length,
+      totalCop: nextLines.reduce((sum, candidate) => sum + (candidate.totalCop || 0), 0),
+    },
+    appraisal: recalculateCropAppraisalWithCostDeltas(savedBlock.appraisal, {
+      [line.stageId]: costDeltaCopHa,
+    }),
+  }
+}
+
+function applyUnitPriceOverrides(savedBlock: SavedBlockResolution, unitPriceOverrides: UnitPriceOverrides) {
+  return savedBlock.result.lines.reduce((currentBlock, originalLine) => {
+    const unitPriceCop = unitPriceOverrides[unitPriceLineKey(savedBlock.cropBlockId, originalLine.templateLineId)]
+    if (unitPriceCop === undefined) return currentBlock
+
+    const currentLine = currentBlock.result.lines.find((candidate) => candidate.templateLineId === originalLine.templateLineId)
+    return currentLine ? overrideLineUnitPrice(currentBlock, currentLine, unitPriceCop) : currentBlock
+  }, savedBlock)
+}
+
+async function persistUnitPriceOverride({
+  line,
+  savedBlock,
+  supabase,
+  unitPriceCop,
+}: {
+  line: ResolvedInsumo
+  savedBlock: SavedBlockResolution
+  supabase: SupabaseClient<Database>
+  unitPriceCop: number
+}) {
+  const nextBlock = overrideLineUnitPrice(savedBlock, line, unitPriceCop)
+  const nextLine = nextBlock.result.lines.find((candidate) => candidate.templateLineId === line.templateLineId)
+  if (!nextLine) throw new Error("No se pudo encontrar el insumo actualizado.")
+
+  const { error: lineError } = await supabase
+    .from("resolved_insumo_lines")
+    .update({
+      unit_price_cop: nextLine.unitPriceCop,
+      unit_price_source: unitPriceOverrideSource,
+      total_cop: nextLine.totalCop,
+      is_overridden: true,
+      override_reason: "Precio unitario ajustado por perito",
+    })
+    .eq("crop_block_id", savedBlock.cropBlockId)
+    .eq("template_line_id", line.templateLineId)
+
+  if (lineError) throw lineError
+
+  const { error: appraisalError } = await supabase
+    .from("crop_appraisal_results")
+    .update(buildCropAppraisalResultInsert(savedBlock.cropBlockId, nextBlock.appraisal))
+    .eq("id", savedBlock.appraisalResultId)
+
+  if (appraisalError) throw appraisalError
+
+  const flowInserts = buildCropAppraisalAnnualFlowInserts(
+    savedBlock.appraisalResultId,
+    savedBlock.cropBlockId,
+    nextBlock.appraisal.annualFlows,
+  )
+
+  if (flowInserts.length > 0) {
+    const { error: flowsError } = await supabase
+      .from("crop_appraisal_annual_flows")
+      .upsert(flowInserts, { onConflict: "appraisal_result_id,line_order" })
+
+    if (flowsError) throw flowsError
+  }
+
+  return nextBlock
+}
+
+function EditableUnitPriceCell({
+  disabled,
+  isEditing,
+  isSaving,
+  onCancel,
+  onCommit,
+  onStartEdit,
+  value,
+}: Readonly<EditableUnitPriceCellProps>) {
+  const commitText = (text: string) => {
+    const parsed = parseLocalizedNumberInput(text)
+    if (parsed === null || parsed < 0) {
+      onCancel()
+      return
+    }
+    onCommit(parsed)
+  }
+
+  if (isEditing) {
+    return (
+      <NumericInput
+        aria-label="Precio unitario"
+        autoFocus
+        className="ml-auto h-8 w-32 text-right"
+        disabled={isSaving}
+        value={value ?? ""}
+        onBlur={(event) => commitText(event.currentTarget.value)}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault()
+            event.currentTarget.blur()
+          }
+          if (event.key === "Escape") {
+            event.preventDefault()
+            onCancel()
+          }
+        }}
+        onValueChange={() => undefined}
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label="Editar precio unitario"
+      className="group/price ml-auto inline-flex items-center justify-end gap-1 text-right tabular-nums outline-none transition-opacity focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={disabled}
+      onClick={onStartEdit}
+    >
+      <span>{formatCurrency(value)}</span>
+      <PencilIcon
+        aria-hidden="true"
+        className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover/price:opacity-55 group-focus-visible/price:opacity-70"
+      />
+    </button>
+  )
 }
 
 function requiredText(value: string, message: string) {
@@ -178,6 +380,31 @@ function validateInputs(parcelData: ParcelHeaderData, blockData: BlockData[]) {
   return { departamentoId, municipioId, discountRateMethod, discountRateEa, blocks }
 }
 
+async function validateMunicipioCropAvailability({
+  blocks,
+  municipioId,
+  supabase,
+}: {
+  blocks: ValidatedBlock[]
+  municipioId: string
+  supabase: SupabaseClient<Database>
+}) {
+  const { data, error } = await supabase
+    .from("municipio_crop_availability")
+    .select("crop_id,variety_id")
+    .eq("municipio_id", municipioId)
+    .eq("active", true)
+    .returns<Array<Pick<MunicipioCropAvailability, "crop_id" | "variety_id">>>()
+
+  if (error) throw error
+
+  const availablePairs = new Set((data || []).map((row) => cropAvailabilityKey(row.crop_id, row.variety_id)))
+  const unavailableBlock = blocks.find(({ block }) => !availablePairs.has(cropAvailabilityKey(block.cropId, block.varietyId)))
+  if (unavailableBlock) {
+    throw new Error("El cultivo seleccionado no está disponible para el municipio del predio.")
+  }
+}
+
 export async function saveValuation({
   supabase,
   parcelData,
@@ -188,6 +415,12 @@ export async function saveValuation({
 
   const { data: userRes, error: userError } = await supabase.auth.getUser()
   if (userError || !userRes.user) throw new Error("Debe iniciar sesión para guardar la valuación.")
+
+  await validateMunicipioCropAvailability({
+    blocks: validated.blocks,
+    municipioId: validated.municipioId,
+    supabase,
+  })
 
   const resolvedBlocks = await Promise.all(
     validated.blocks.map(async ({ block, ageYears, cropAreaHa, commercialPriceCopKg }) => {
@@ -376,182 +609,263 @@ export async function saveValuation({
   return { caseId, persistedBlocks }
 }
 
-export function ValuationResultTables({ savedBlocks }: Readonly<{ savedBlocks: SavedBlockResolution[] }>) {
-  if (savedBlocks.length === 0) return null
-  const totalAppraisedValue = savedBlocks.reduce((sum, block) => sum + block.appraisal.appraisedValueCop, 0)
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Avalúo final del predio</CardTitle>
-          <CardDescription>Valor consolidado de los cultivos registrados</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="text-3xl font-semibold text-emerald-700">{formatCurrency(totalAppraisedValue)}</div>
-        </CardContent>
-      </Card>
-
-      {savedBlocks.map(({ cropBlockId, block, result, appraisal }) => (
-        <Card key={cropBlockId}>
-          <CardHeader>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle>{block.blockLabel}</CardTitle>
-                <CardDescription>Resultado del cultivo registrado</CardDescription>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary">Etapa: {result.stageName}</Badge>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-4">
-              <div className="rounded-md border bg-white px-4 py-3">
-                <div className="text-xs text-muted-foreground">Valor del cultivo</div>
-                <div className="text-lg font-semibold text-emerald-700">{formatCurrency(appraisal.appraisedValueCop)}</div>
-              </div>
-              <div className="rounded-md border bg-white px-4 py-3">
-                <div className="text-xs text-muted-foreground">Valor por hectárea</div>
-                <div className="text-lg font-semibold">{formatCurrency(appraisal.appraisedValueCopHa)}</div>
-              </div>
-              <div className="rounded-md border bg-white px-4 py-3">
-                <div className="text-xs text-muted-foreground">Valor por planta</div>
-                <div className="text-lg font-semibold">{formatCurrency(appraisal.appraisedValueCopPerPlant)}</div>
-              </div>
-              <div className="rounded-md border bg-white px-4 py-3">
-                <div className="text-xs text-muted-foreground">Área valorada</div>
-                <div className="text-lg font-semibold">{formatNumber(appraisal.cropAreaHa)} ha</div>
-              </div>
-            </div>
-
-            <div className="grid gap-4 text-sm md:grid-cols-5">
-              <div>
-                <span className="font-medium">Rendimiento del año:</span> {formatNumber(appraisal.currentYearYieldKgHa)} kg/ha
-              </div>
-              <div>
-                <span className="font-medium">Ingreso del año:</span> {formatCurrency(appraisal.currentYearRevenueCopHa)}
-              </div>
-              <div>
-                <span className="font-medium">Costo del año:</span> {formatCurrency(appraisal.currentYearCostCopHa)}
-              </div>
-              <div>
-                <span className="font-medium">Utilidad del año:</span> {formatCurrency(appraisal.currentYearUtilityCopHa)}
-              </div>
-              <div>
-                <span className="font-medium">Pendiente por recuperar:</span> {formatCurrency(appraisal.pendingRecoveryCopHa)}
-              </div>
-            </div>
-
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Rubro</TableHead>
-                  <TableHead>Servicio o insumo</TableHead>
-                  <TableHead>Actividad</TableHead>
-                  <TableHead>Presentación</TableHead>
-                  <TableHead className="text-right">Cantidad</TableHead>
-                  <TableHead className="text-right">Precio unitario (COP)</TableHead>
-                  <TableHead className="text-right">Total (COP)</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {result.lines.map((line) => (
-                  <TableRow key={line.templateLineId}>
-                    <TableCell>{line.rubroName}</TableCell>
-                    <TableCell className="font-medium">{line.inputName}</TableCell>
-                    <TableCell>{formatDisplayLabel(line.activityName)}</TableCell>
-                    <TableCell>{line.presentation}</TableCell>
-                    <TableCell className="text-right">{formatNumber(line.quantity)}</TableCell>
-                    <TableCell className="text-right">{formatCurrency(line.unitPriceCop)}</TableCell>
-                    <TableCell className="text-right font-medium">{formatCurrency(line.totalCop)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-              <TableFooter>
-                <TableRow>
-                  <TableCell colSpan={6}>Total</TableCell>
-                  <TableCell className="text-right">{formatCurrency(result.totalCop)}</TableCell>
-                </TableRow>
-              </TableFooter>
-            </Table>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  )
-}
-
-export function ValuationCalculator({ parcelData, blockData, existingCaseId, onSaved }: Readonly<ValuationCalculatorProps>) {
+export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultTablesProps>) {
   const supabase = useMemo(() => createClient(), [])
-  const [isSaving, setIsSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [savedCaseId, setSavedCaseId] = useState<string | null>(null)
-  const [savedBlocks, setSavedBlocks] = useState<SavedBlockResolution[]>([])
+  const [editingLineKey, setEditingLineKey] = useState<string | null>(null)
+  const [savingLineKey, setSavingLineKey] = useState<string | null>(null)
+  const [priceError, setPriceError] = useState<string | null>(null)
+  const [unitPriceOverrides, setUnitPriceOverrides] = useState<UnitPriceOverrides>({})
 
-  const handleSubmit = useCallback(async () => {
-    setError(null)
-    setIsSaving(true)
+  if (savedBlocks.length === 0) return null
+
+  const displayedBlocks = savedBlocks.map((savedBlock) => applyUnitPriceOverrides(savedBlock, unitPriceOverrides))
+
+  const handleUnitPriceCommit = async (savedBlock: SavedBlockResolution, line: ResolvedInsumo, unitPriceCop: number) => {
+    const lineKey = unitPriceLineKey(savedBlock.cropBlockId, line.templateLineId)
+    const previousOverride = unitPriceOverrides[lineKey]
+    setEditingLineKey(null)
+
+    if (line.unitPriceCop !== null && Math.abs(line.unitPriceCop - unitPriceCop) < 0.000001) return
+
+    setPriceError(null)
+    setSavingLineKey(lineKey)
+    setUnitPriceOverrides((current) => ({ ...current, [lineKey]: unitPriceCop }))
 
     try {
-      const result = await saveValuation({ supabase, parcelData, blockData, existingCaseId })
-      setSavedCaseId(result.caseId)
-      setSavedBlocks(result.persistedBlocks)
-      onSaved?.(result.caseId)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo guardar la valuación.")
+      await persistUnitPriceOverride({ line, savedBlock, supabase, unitPriceCop })
+    } catch {
+      setUnitPriceOverrides((current) => {
+        const next = { ...current }
+        if (previousOverride === undefined) {
+          delete next[lineKey]
+        } else {
+          next[lineKey] = previousOverride
+        }
+        return next
+      })
+      setPriceError("No se pudo actualizar el precio unitario. Intente nuevamente.")
     } finally {
-      setIsSaving(false)
+      setSavingLineKey(null)
     }
-  }, [blockData, existingCaseId, onSaved, parcelData, supabase])
+  }
+
+  const totalAppraisedValue = displayedBlocks.reduce((sum, block) => sum + block.appraisal.appraisedValueCop, 0)
+  const totalAreaHa = displayedBlocks.reduce((sum, block) => sum + block.appraisal.cropAreaHa, 0)
+  const averageValueCopHa = totalAreaHa > 0 ? totalAppraisedValue / totalAreaHa : null
+  const totalRevenueCop = displayedBlocks.reduce(
+    (sum, block) => sum + block.appraisal.currentYearRevenueCopHa * block.appraisal.cropAreaHa,
+    0,
+  )
+  const totalCostCop = displayedBlocks.reduce(
+    (sum, block) => sum + block.appraisal.currentYearCostCopHa * block.appraisal.cropAreaHa,
+    0,
+  )
+  const totalUtilityCop = displayedBlocks.reduce(
+    (sum, block) => sum + block.appraisal.currentYearUtilityCopHa * block.appraisal.cropAreaHa,
+    0,
+  )
+  const totalPendingRecoveryCop = displayedBlocks.reduce(
+    (sum, block) => sum + block.appraisal.pendingRecoveryCopHa * block.appraisal.cropAreaHa,
+    0,
+  )
+  const totalPlants = displayedBlocks.reduce((sum, block) => {
+    const density = block.appraisal.densityPlantsHa
+    return density && density > 0 ? sum + density * block.appraisal.cropAreaHa : sum
+  }, 0)
+  const averageValueCopPerPlant = totalPlants > 0 ? totalAppraisedValue / totalPlants : null
+  const utilityMargin = totalRevenueCop > 0 ? totalUtilityCop / totalRevenueCop : null
+  const highestValueBlock = displayedBlocks.reduce((highest, block) =>
+    block.appraisal.appraisedValueCop > highest.appraisal.appraisedValueCop ? block : highest,
+  )
 
   return (
     <div className="space-y-6">
-      <Card>
+      <Card className="gap-4">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <SaveIcon className="h-5 w-5 text-emerald-600" />
-            Resultado de Valuación
-          </CardTitle>
-          <CardDescription>
-            Guardar la valuación del predio {parcelData.parcelId} y presentar el avalúo final.
-          </CardDescription>
+          <CardTitle>Resumen del predio</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="font-medium">Predio:</span> {parcelData.parcelId}
-            </div>
-            {parcelData.totalParcelAreaHa ? (
+        <CardContent className="space-y-6">
+          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="space-y-4">
               <div>
-                <span className="font-medium">Área total:</span> {parcelData.totalParcelAreaHa} ha
+                <div className="text-sm text-muted-foreground">Avalúo final del predio</div>
+                <div className="text-4xl font-semibold tracking-normal text-emerald-700">
+                  {formatCurrency(totalAppraisedValue)}
+                </div>
               </div>
-            ) : null}
-            <div>
-              <span className="font-medium">Cultivos/Lotes:</span> {blockData.length}
+              <dl className="grid gap-4 sm:grid-cols-3">
+                <div className="border-l border-emerald-200 pl-4">
+                  <dt className="text-xs text-muted-foreground">Área valorada</dt>
+                  <dd className="text-lg font-semibold">{formatNumber(totalAreaHa)} ha</dd>
+                </div>
+                <div className="border-l border-emerald-200 pl-4">
+                  <dt className="text-xs text-muted-foreground">Valor promedio por ha</dt>
+                  <dd className="text-lg font-semibold">{formatCurrency(averageValueCopHa)}</dd>
+                </div>
+                <div className="border-l border-emerald-200 pl-4">
+                  <dt className="text-xs text-muted-foreground">Cultivos/Lotes</dt>
+                  <dd className="text-lg font-semibold">{displayedBlocks.length}</dd>
+                </div>
+              </dl>
             </div>
-            <div>
-              <span className="font-medium">Fecha:</span> {parcelData.valuationAsOfDate}
-            </div>
+
+            <dl className="grid gap-4 sm:grid-cols-2">
+              <div className="border-l border-border pl-4">
+                <dt className="text-xs text-muted-foreground">Ingreso año actual</dt>
+                <dd className="text-base font-semibold">{formatCurrency(totalRevenueCop)}</dd>
+              </div>
+              <div className="border-l border-border pl-4">
+                <dt className="text-xs text-muted-foreground">Costo año actual</dt>
+                <dd className="text-base font-semibold">{formatCurrency(totalCostCop)}</dd>
+              </div>
+              <div className="border-l border-border pl-4">
+                <dt className="text-xs text-muted-foreground">Utilidad año actual</dt>
+                <dd className={`text-base font-semibold ${metricValueClassName(totalUtilityCop)}`}>
+                  {formatCurrency(totalUtilityCop)}
+                </dd>
+              </div>
+              <div className="border-l border-border pl-4">
+                <dt className="text-xs text-muted-foreground">Margen de utilidad</dt>
+                <dd className={`text-base font-semibold ${metricValueClassName(totalUtilityCop)}`}>
+                  {formatPercent(utilityMargin)}
+                </dd>
+              </div>
+            </dl>
           </div>
 
-          {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
-          ) : null}
-
-          <Button onClick={handleSubmit} disabled={isSaving || Boolean(savedCaseId)} className="w-full">
-            {isSaving
-              ? "Guardando..."
-              : savedCaseId
-                ? "Valuación guardada"
-                : existingCaseId
-                  ? "Actualizar y presentar resultado"
-                  : "Guardar y presentar resultado"}
-          </Button>
+          <div className="grid gap-4 border-t pt-5 text-sm md:grid-cols-3">
+            <div>
+              <span className="font-medium">Valor promedio por planta:</span> {formatCurrency(averageValueCopPerPlant)}
+            </div>
+            <div>
+              <span className="font-medium">Pendiente por recuperar:</span> {formatCurrency(totalPendingRecoveryCop)}
+            </div>
+            <div>
+              <span className="font-medium">Lote de mayor valor:</span> {highestValueBlock.block.blockLabel} ·{" "}
+              {formatCurrency(highestValueBlock.appraisal.appraisedValueCop)}
+            </div>
+          </div>
         </CardContent>
       </Card>
 
-      <ValuationResultTables savedBlocks={savedBlocks} />
+      {priceError ? (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="py-3 text-sm text-red-800">{priceError}</CardContent>
+        </Card>
+      ) : null}
+
+      {displayedBlocks.map((savedBlock) => {
+        const { cropBlockId, block, result, appraisal } = savedBlock
+
+        return (
+          <Card key={cropBlockId}>
+            <CardHeader>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle>{block.blockLabel}</CardTitle>
+                  <CardDescription>Resultado del cultivo registrado</CardDescription>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">Etapa: {result.stageName}</Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-4">
+                <div className="rounded-md border bg-white px-4 py-3">
+                  <div className="text-xs text-muted-foreground">Valor del cultivo</div>
+                  <div className="text-lg font-semibold text-emerald-700">
+                    {formatCurrency(appraisal.appraisedValueCop)}
+                  </div>
+                </div>
+                <div className="rounded-md border bg-white px-4 py-3">
+                  <div className="text-xs text-muted-foreground">Valor por hectárea</div>
+                  <div className="text-lg font-semibold">{formatCurrency(appraisal.appraisedValueCopHa)}</div>
+                </div>
+                <div className="rounded-md border bg-white px-4 py-3">
+                  <div className="text-xs text-muted-foreground">Valor por planta</div>
+                  <div className="text-lg font-semibold">{formatCurrency(appraisal.appraisedValueCopPerPlant)}</div>
+                </div>
+                <div className="rounded-md border bg-white px-4 py-3">
+                  <div className="text-xs text-muted-foreground">Área valorada</div>
+                  <div className="text-lg font-semibold">{formatNumber(appraisal.cropAreaHa)} ha</div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 text-sm md:grid-cols-5">
+                <div>
+                  <span className="font-medium">Rendimiento del año:</span>{" "}
+                  {formatNumber(appraisal.currentYearYieldKgHa)} kg/ha
+                </div>
+                <div>
+                  <span className="font-medium">Ingreso del año:</span>{" "}
+                  {formatCurrency(appraisal.currentYearRevenueCopHa)}
+                </div>
+                <div>
+                  <span className="font-medium">Costo del año:</span> {formatCurrency(appraisal.currentYearCostCopHa)}
+                </div>
+                <div>
+                  <span className="font-medium">Utilidad del año:</span>{" "}
+                  {formatCurrency(appraisal.currentYearUtilityCopHa)}
+                </div>
+                <div>
+                  <span className="font-medium">Pendiente por recuperar:</span>{" "}
+                  {formatCurrency(appraisal.pendingRecoveryCopHa)}
+                </div>
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Rubro</TableHead>
+                    <TableHead>Servicio o insumo</TableHead>
+                    <TableHead>Actividad</TableHead>
+                    <TableHead>Presentación</TableHead>
+                    <TableHead className="text-right">Cantidad</TableHead>
+                    <TableHead className="text-right">Precio unitario (COP)</TableHead>
+                    <TableHead className="text-right">Total (COP)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {result.lines.map((line) => {
+                    const lineKey = unitPriceLineKey(cropBlockId, line.templateLineId)
+
+                    return (
+                      <TableRow key={line.templateLineId}>
+                        <TableCell>{line.rubroName}</TableCell>
+                        <TableCell className="font-medium">{line.inputName}</TableCell>
+                        <TableCell>{formatDisplayLabel(line.activityName)}</TableCell>
+                        <TableCell>{line.presentation}</TableCell>
+                        <TableCell className="text-right">{formatNumber(line.quantity)}</TableCell>
+                        <TableCell className="text-right">
+                          <EditableUnitPriceCell
+                            disabled={savingLineKey !== null}
+                            isEditing={editingLineKey === lineKey}
+                            isSaving={savingLineKey === lineKey}
+                            value={line.unitPriceCop}
+                            onCancel={() => setEditingLineKey(null)}
+                            onCommit={(value) => {
+                              void handleUnitPriceCommit(savedBlock, line, value)
+                            }}
+                            onStartEdit={() => setEditingLineKey(lineKey)}
+                          />
+                        </TableCell>
+                        <TableCell className="text-right font-medium">{formatCurrency(line.totalCop)}</TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+                <TableFooter>
+                  <TableRow>
+                    <TableCell colSpan={6}>Total</TableCell>
+                    <TableCell className="text-right">{formatCurrency(result.totalCop)}</TableCell>
+                  </TableRow>
+                </TableFooter>
+              </Table>
+            </CardContent>
+          </Card>
+        )
+      })}
     </div>
   )
 }

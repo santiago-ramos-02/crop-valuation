@@ -83,6 +83,8 @@ export interface CalculateCropAppraisalInput {
   discountRateEa: number
 }
 
+const productionStageIds: ProductionStageId[] = ["establecimiento", "improductivo", "mantenimiento", "salvamento"]
+
 function toNumber(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined || value === "") return null
   const parsed = Number(value)
@@ -183,6 +185,17 @@ function breakEvenAgeWithOpportunityCost(flows: CropAppraisalAnnualFlow[], disco
     if (capitalizedNetThroughYear >= 0) return flow.ageYears
   }
   return null
+}
+
+function appraisedValueForRule(
+  appraisalRule: AppraisalRule,
+  vegetativeInvestmentCopHa: number,
+  currentYearUtilityCopHa: number,
+  pendingRecoveryCopHa: number,
+) {
+  if (appraisalRule === "vegetative") return vegetativeInvestmentCopHa
+  if (appraisalRule === "pre_equilibrium") return currentYearUtilityCopHa + pendingRecoveryCopHa
+  return currentYearUtilityCopHa
 }
 
 export async function calculateCropAppraisal({
@@ -330,17 +343,16 @@ export async function calculateCropAppraisal({
       ? "post_equilibrium"
       : "pre_equilibrium"
 
-  const decisionTreeValueCopHa =
-    appraisalRule === "vegetative"
-      ? vegetativeInvestmentCopHa
-      : appraisalRule === "pre_equilibrium"
-        ? currentFlow.netFlowCopHa + pendingRecoveryCopHa
-        : currentFlow.netFlowCopHa
+  const decisionTreeValueCopHa = appraisedValueForRule(
+    appraisalRule,
+    vegetativeInvestmentCopHa,
+    currentFlow.netFlowCopHa,
+    pendingRecoveryCopHa,
+  )
   const vegetativeFinalValueCopHa = vegetativeInvestmentCopHa
-  const productiveFinalValueCopHa = remainingNpvCopHa
+  const productiveFinalValueCopHa = startedProducing ? decisionTreeValueCopHa : 0
   const finalValueStage = startedProducing ? "productive" : "vegetative"
-  const appraisedValueCopHa =
-    finalValueStage === "vegetative" ? vegetativeFinalValueCopHa : productiveFinalValueCopHa
+  const appraisedValueCopHa = decisionTreeValueCopHa
   const appraisedValueCop = appraisedValueCopHa * cropAreaHa
   const appraisedValueCopPerPlant =
     densityPlantsHa !== null && densityPlantsHa > 0 ? appraisedValueCopHa / densityPlantsHa : null
@@ -413,6 +425,112 @@ export function buildCropAppraisalResultInsert(cropBlockId: string, appraisal: C
       missing_cost_line_count: appraisal.missingCostLineCount,
       stage_cost_totals_cop_ha: appraisal.stageCostTotalsCopHa,
     } as unknown as Json,
+  }
+}
+
+function flowCostDelta(
+  flow: CropAppraisalAnnualFlow,
+  nextFlow: CropAppraisalAnnualFlow | undefined,
+  stageCostDeltasCopHa: Partial<Record<ProductionStageId, number>>,
+) {
+  const stageDelta = stageCostDeltasCopHa[flow.stageId] || 0
+  const salvageDelta =
+    flow.stageId === "mantenimiento" && nextFlow?.stageId !== "mantenimiento"
+      ? stageCostDeltasCopHa.salvamento || 0
+      : 0
+
+  return stageDelta + salvageDelta
+}
+
+export function recalculateCropAppraisalWithCostDeltas(
+  appraisal: CalculatedCropAppraisal,
+  stageCostDeltasCopHa: Partial<Record<ProductionStageId, number>>,
+): CalculatedCropAppraisal {
+  const currentYear = appraisal.currentAgeYear
+  const stageCostTotalsCopHa = { ...appraisal.stageCostTotalsCopHa }
+
+  for (const stageId of productionStageIds) {
+    stageCostTotalsCopHa[stageId] += stageCostDeltasCopHa[stageId] || 0
+  }
+
+  let cumulativeNetFlowCopHa = 0
+  const annualFlows = appraisal.annualFlows.map((flow, index): CropAppraisalAnnualFlow => {
+    const costCopHa = flow.costCopHa + flowCostDelta(flow, appraisal.annualFlows[index + 1], stageCostDeltasCopHa)
+    const netFlowCopHa = flow.revenueCopHa - costCopHa
+    cumulativeNetFlowCopHa += netFlowCopHa
+
+    const isPastOrCurrent = flow.ageYears <= currentYear
+    const yearsToCurrent = currentYear - flow.ageYears
+    const remainingIndex = flow.ageYears - currentYear + 1
+    const investmentFutureValueCopHa = isPastOrCurrent ? costCopHa * (1 + appraisal.discountRateEa) ** yearsToCurrent : null
+    const capitalizedNetFlow = isPastOrCurrent ? netFlowCopHa * (1 + appraisal.discountRateEa) ** yearsToCurrent : null
+    const discountFactor = flow.isRemainingYear ? (1 + appraisal.discountRateEa) ** remainingIndex : null
+
+    return {
+      ...flow,
+      costCopHa,
+      netFlowCopHa,
+      cumulativeNetFlowCopHa,
+      investmentFutureValueCopHa,
+      pendingRecoveryCopHa: capitalizedNetFlow === null ? null : Math.max(0, -capitalizedNetFlow),
+      discountFactor,
+      presentValueCopHa: discountFactor === null ? null : netFlowCopHa / discountFactor,
+    }
+  })
+
+  const currentFlow = annualFlows.find((flow) => flow.ageYears === currentYear)
+  if (!currentFlow) return appraisal
+
+  const capitalizedNetThroughCurrent = annualFlows
+    .filter((flow) => flow.ageYears <= currentYear)
+    .reduce((sum, flow) => sum + flow.netFlowCopHa * (1 + appraisal.discountRateEa) ** (currentYear - flow.ageYears), 0)
+  const vegetativeInvestmentCopHa = annualFlows
+    .filter((flow) => flow.ageYears <= currentYear)
+    .reduce((sum, flow) => sum + flow.costCopHa * (1 + appraisal.discountRateEa) ** (currentYear - flow.ageYears), 0)
+  const pendingRecoveryCopHa = Math.max(0, -capitalizedNetThroughCurrent)
+  const breakEvenReached = capitalizedNetThroughCurrent >= 0
+  const remainingNpvCopHa = annualFlows.reduce((sum, flow) => sum + (flow.presentValueCopHa || 0), 0)
+  const appraisalRule: AppraisalRule = !appraisal.startedProducing
+    ? "vegetative"
+    : breakEvenReached
+      ? "post_equilibrium"
+      : "pre_equilibrium"
+
+  const decisionTreeValueCopHa = appraisedValueForRule(
+    appraisalRule,
+    vegetativeInvestmentCopHa,
+    currentFlow.netFlowCopHa,
+    pendingRecoveryCopHa,
+  )
+  const vegetativeFinalValueCopHa = vegetativeInvestmentCopHa
+  const productiveFinalValueCopHa = appraisal.startedProducing ? decisionTreeValueCopHa : 0
+  const finalValueStage = appraisal.startedProducing ? "productive" : "vegetative"
+  const appraisedValueCopHa = decisionTreeValueCopHa
+  const appraisedValueCop = appraisedValueCopHa * appraisal.cropAreaHa
+  const appraisedValueCopPerPlant =
+    appraisal.densityPlantsHa !== null && appraisal.densityPlantsHa > 0
+      ? appraisedValueCopHa / appraisal.densityPlantsHa
+      : null
+
+  return {
+    ...appraisal,
+    appraisalRule,
+    breakEvenReached,
+    breakEvenAgeYears: breakEvenAgeWithOpportunityCost(annualFlows, appraisal.discountRateEa),
+    currentYearCostCopHa: currentFlow.costCopHa,
+    currentYearUtilityCopHa: currentFlow.netFlowCopHa,
+    vegetativeInvestmentCopHa,
+    pendingRecoveryCopHa,
+    remainingNpvCopHa,
+    vegetativeFinalValueCopHa,
+    productiveFinalValueCopHa,
+    decisionTreeValueCopHa,
+    finalValueStage,
+    appraisedValueCopHa,
+    appraisedValueCop,
+    appraisedValueCopPerPlant,
+    stageCostTotalsCopHa,
+    annualFlows,
   }
 }
 

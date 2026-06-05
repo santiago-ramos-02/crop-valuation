@@ -177,7 +177,7 @@ export type Database = {
           harvest_years: Numeric | null
           support_years: Numeric | null
           source_row: number | null
-          raw_excel_row: Json | null
+          source_row_data: Json | null
         }
         Insert: {
           id?: string
@@ -194,7 +194,7 @@ export type Database = {
           harvest_years?: Numeric | number | null
           support_years?: Numeric | number | null
           source_row?: number | null
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
         }
         Update: {
           id?: string
@@ -211,7 +211,70 @@ export type Database = {
           harvest_years?: Numeric | number | null
           support_years?: Numeric | number | null
           source_row?: number | null
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
+        }
+        Relationships: []
+      }
+      municipio_crop_availability: {
+        Row: {
+          municipio_id: string
+          crop_id: string
+          variety_id: string
+          source_year: number
+          source_period: string
+          dane_departamento_code: string | null
+          dane_municipio_code: string | null
+          planted_area_ha: Numeric | null
+          harvested_area_ha: Numeric | null
+          production_t: Numeric | null
+          yield_t_ha: Numeric | null
+          scientific_name: string | null
+          crop_code: string | null
+          physical_state: string | null
+          source_sheet: string
+          source_row: number
+          source_row_data: Json | null
+          active: boolean | null
+        }
+        Insert: {
+          municipio_id: string
+          crop_id: string
+          variety_id: string
+          source_year: number
+          source_period: string
+          dane_departamento_code?: string | null
+          dane_municipio_code?: string | null
+          planted_area_ha?: Numeric | number | null
+          harvested_area_ha?: Numeric | number | null
+          production_t?: Numeric | number | null
+          yield_t_ha?: Numeric | number | null
+          scientific_name?: string | null
+          crop_code?: string | null
+          physical_state?: string | null
+          source_sheet?: string
+          source_row: number
+          source_row_data?: Json | null
+          active?: boolean | null
+        }
+        Update: {
+          municipio_id?: string
+          crop_id?: string
+          variety_id?: string
+          source_year?: number
+          source_period?: string
+          dane_departamento_code?: string | null
+          dane_municipio_code?: string | null
+          planted_area_ha?: Numeric | number | null
+          harvested_area_ha?: Numeric | number | null
+          production_t?: Numeric | number | null
+          yield_t_ha?: Numeric | number | null
+          scientific_name?: string | null
+          crop_code?: string | null
+          physical_state?: string | null
+          source_sheet?: string
+          source_row?: number
+          source_row_data?: Json | null
+          active?: boolean | null
         }
         Relationships: []
       }
@@ -238,7 +301,7 @@ export type Database = {
           unit_price_mode: "fixed" | "input_price_lookup" | "jornal_lookup" | "calculated"
           source_sheet: string
           source_row: number
-          raw_excel_row: Json | null
+          source_row_data: Json | null
         }
         Insert: {
           id?: string
@@ -262,7 +325,7 @@ export type Database = {
           unit_price_mode?: "fixed" | "input_price_lookup" | "jornal_lookup" | "calculated"
           source_sheet?: string
           source_row: number
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
         }
         Update: {
           id?: string
@@ -286,7 +349,7 @@ export type Database = {
           unit_price_mode?: "fixed" | "input_price_lookup" | "jornal_lookup" | "calculated"
           source_sheet?: string
           source_row?: number
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
         }
         Relationships: []
       }
@@ -294,7 +357,7 @@ export type Database = {
         Row: {
           id: string
           departamento_id: string | null
-          departamento_name_excel: string
+          departamento_name_source: string
           input_group_name: string | null
           input_name: string
           normalized_input_name: string
@@ -307,12 +370,12 @@ export type Database = {
           calculated_final_price_cop: Numeric | null
           source_sheet: string
           source_row: number
-          raw_excel_row: Json | null
+          source_row_data: Json | null
         }
         Insert: {
           id?: string
           departamento_id?: string | null
-          departamento_name_excel: string
+          departamento_name_source: string
           input_group_name?: string | null
           input_name: string
           normalized_input_name: string
@@ -325,12 +388,12 @@ export type Database = {
           calculated_final_price_cop?: Numeric | number | null
           source_sheet?: string
           source_row: number
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
         }
         Update: {
           id?: string
           departamento_id?: string | null
-          departamento_name_excel?: string
+          departamento_name_source?: string
           input_group_name?: string | null
           input_name?: string
           normalized_input_name?: string
@@ -343,7 +406,7 @@ export type Database = {
           calculated_final_price_cop?: Numeric | number | null
           source_sheet?: string
           source_row?: number
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
         }
         Relationships: []
       }
@@ -360,7 +423,7 @@ export type Database = {
           water_factor: Numeric | null
           source_sheet: string
           source_row: number
-          raw_excel_row: Json | null
+          source_row_data: Json | null
         }
         Insert: {
           id?: string
@@ -374,7 +437,7 @@ export type Database = {
           water_factor?: Numeric | number | null
           source_sheet?: string
           source_row: number
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
         }
         Update: {
           id?: string
@@ -388,7 +451,7 @@ export type Database = {
           water_factor?: Numeric | number | null
           source_sheet?: string
           source_row?: number
-          raw_excel_row?: Json | null
+          source_row_data?: Json | null
         }
         Relationships: []
       }

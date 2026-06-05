@@ -1,9 +1,9 @@
--- Clean-start schema for the Excel-based crop appraisal workflow.
--- Run this before the generated seed SQL files in scripts/generated/.
+-- Clean-start schema for the crop appraisal workflow.
+-- Supabase loads the ordered seed SQL files configured in supabase/config.toml after this migration.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Drop old valuation schema and any previous insumos refactor objects.
+-- Reset managed public schema objects.
 DROP TABLE IF EXISTS public.resolved_insumo_lines CASCADE;
 DROP TABLE IF EXISTS public.crop_appraisal_annual_flows CASCADE;
 DROP TABLE IF EXISTS public.crop_appraisal_results CASCADE;
@@ -13,6 +13,7 @@ DROP TABLE IF EXISTS public.valuation_cases CASCADE;
 DROP TABLE IF EXISTS public.input_price_rows CASCADE;
 DROP TABLE IF EXISTS public.yield_curve_points CASCADE;
 DROP TABLE IF EXISTS public.cost_template_lines CASCADE;
+DROP TABLE IF EXISTS public.municipio_crop_availability CASCADE;
 DROP TABLE IF EXISTS public.crop_variety_agronomic_profiles CASCADE;
 DROP TABLE IF EXISTS public.lookup_options CASCADE;
 DROP TABLE IF EXISTS public.production_stages CASCADE;
@@ -21,18 +22,7 @@ DROP TABLE IF EXISTS public.departamentos CASCADE;
 DROP TABLE IF EXISTS public.varieties CASCADE;
 DROP TABLE IF EXISTS public.crops CASCADE;
 
-DROP TABLE IF EXISTS public.valuation_results CASCADE;
-DROP TABLE IF EXISTS public.blocks CASCADE;
-DROP TABLE IF EXISTS public.parcels CASCADE;
-DROP TABLE IF EXISTS public.cost_templates CASCADE;
-DROP TABLE IF EXISTS public.cost_curves CASCADE;
-DROP TABLE IF EXISTS public.age_yield_curves CASCADE;
-DROP TABLE IF EXISTS public.regions CASCADE;
-
 DROP FUNCTION IF EXISTS public.set_updated_at() CASCADE;
-DROP FUNCTION IF EXISTS public.update_updated_at_column() CASCADE;
-DROP FUNCTION IF EXISTS public.validate_block_areas() CASCADE;
-DROP FUNCTION IF EXISTS public.calculate_age_years(DATE, DATE) CASCADE;
 
 -- Reference tables.
 CREATE TABLE public.departamentos (
@@ -109,9 +99,35 @@ CREATE TABLE public.crop_variety_agronomic_profiles (
   support_years DECIMAL(10,2),
 
   source_row INTEGER,
-  raw_excel_row JSONB DEFAULT '{}'::jsonb,
+  source_row_data JSONB DEFAULT '{}'::jsonb,
 
   UNIQUE (crop_id, variety_id)
+);
+
+CREATE TABLE public.municipio_crop_availability (
+  municipio_id TEXT NOT NULL REFERENCES public.municipios(id),
+  crop_id TEXT NOT NULL REFERENCES public.crops(id),
+  variety_id TEXT NOT NULL REFERENCES public.varieties(id),
+
+  source_year INTEGER NOT NULL,
+  source_period TEXT NOT NULL,
+  dane_departamento_code TEXT,
+  dane_municipio_code TEXT,
+
+  planted_area_ha DECIMAL(18,6),
+  harvested_area_ha DECIMAL(18,6),
+  production_t DECIMAL(18,6),
+  yield_t_ha DECIMAL(18,6),
+  scientific_name TEXT,
+  crop_code TEXT,
+  physical_state TEXT,
+
+  source_sheet TEXT NOT NULL DEFAULT 'Cultivos',
+  source_row INTEGER NOT NULL,
+  source_row_data JSONB DEFAULT '{}'::jsonb,
+  active BOOLEAN DEFAULT TRUE,
+
+  PRIMARY KEY (municipio_id, crop_id, variety_id, source_year, source_period)
 );
 
 CREATE TABLE public.cost_template_lines (
@@ -142,7 +158,7 @@ CREATE TABLE public.cost_template_lines (
 
   source_sheet TEXT NOT NULL DEFAULT 'Base_datActividades_priorFIN',
   source_row INTEGER NOT NULL,
-  raw_excel_row JSONB DEFAULT '{}'::jsonb,
+  source_row_data JSONB DEFAULT '{}'::jsonb,
 
   UNIQUE (source_sheet, source_row)
 );
@@ -162,7 +178,7 @@ CREATE TABLE public.yield_curve_points (
 
   source_sheet TEXT NOT NULL DEFAULT 'Rendimientos estandar_',
   source_row INTEGER NOT NULL,
-  raw_excel_row JSONB DEFAULT '{}'::jsonb,
+  source_row_data JSONB DEFAULT '{}'::jsonb,
 
   UNIQUE (source_sheet, source_row),
   UNIQUE (crop_id, variety_id, age_years)
@@ -172,7 +188,7 @@ CREATE TABLE public.input_price_rows (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   departamento_id TEXT REFERENCES public.departamentos(id),
-  departamento_name_excel TEXT NOT NULL,
+  departamento_name_source TEXT NOT NULL,
   input_group_name TEXT,
   input_name TEXT NOT NULL,
   normalized_input_name TEXT NOT NULL,
@@ -187,7 +203,7 @@ CREATE TABLE public.input_price_rows (
 
   source_sheet TEXT NOT NULL DEFAULT 'Tabla_Costos_Insumos',
   source_row INTEGER NOT NULL,
-  raw_excel_row JSONB DEFAULT '{}'::jsonb,
+  source_row_data JSONB DEFAULT '{}'::jsonb,
 
   UNIQUE (source_sheet, source_row)
 );
@@ -382,6 +398,10 @@ CREATE INDEX idx_varieties_crop
 CREATE INDEX idx_crop_variety_profiles_lookup
   ON public.crop_variety_agronomic_profiles (crop_id, variety_id);
 
+CREATE INDEX idx_municipio_crop_availability_lookup
+  ON public.municipio_crop_availability (municipio_id, crop_id, variety_id)
+  WHERE active;
+
 CREATE INDEX idx_cost_template_lines_resolver
   ON public.cost_template_lines (crop_id, variety_id, stage_id, line_order);
 
@@ -441,6 +461,7 @@ ALTER TABLE public.varieties ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.production_stages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.lookup_options ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.crop_variety_agronomic_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.municipio_crop_availability ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cost_template_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.yield_curve_points ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.input_price_rows ENABLE ROW LEVEL SECURITY;
@@ -471,6 +492,9 @@ CREATE POLICY "lookup_options_select_all" ON public.lookup_options
   FOR SELECT TO authenticated USING (TRUE);
 
 CREATE POLICY "crop_variety_agronomic_profiles_select_all" ON public.crop_variety_agronomic_profiles
+  FOR SELECT TO authenticated USING (TRUE);
+
+CREATE POLICY "municipio_crop_availability_select_all" ON public.municipio_crop_availability
   FOR SELECT TO authenticated USING (TRUE);
 
 CREATE POLICY "cost_template_lines_select_all" ON public.cost_template_lines

@@ -19,6 +19,7 @@ type Crop = Database["public"]["Tables"]["crops"]["Row"]
 type Variety = Database["public"]["Tables"]["varieties"]["Row"]
 type LookupOption = Database["public"]["Tables"]["lookup_options"]["Row"]
 type AgronomicProfile = Database["public"]["Tables"]["crop_variety_agronomic_profiles"]["Row"]
+type MunicipioCropAvailability = Database["public"]["Tables"]["municipio_crop_availability"]["Row"]
 
 export interface BlockData {
   blockLabel: string
@@ -50,6 +51,7 @@ interface BlockEntryFormProps {
   onChange?: (blocks: BlockData[]) => void
   initialBlocks?: BlockData[]
   isLoading?: boolean
+  municipioId?: string
   totalParcelAreaHa?: number
   submitLabel?: string
 }
@@ -181,11 +183,16 @@ function fitosanitaryFactorFor(condition: string) {
   return ""
 }
 
+function availabilityKey(cropId: string, varietyId: string) {
+  return `${cropId}:${varietyId}`
+}
+
 export function BlockEntryForm({
   onSubmit,
   onChange,
   initialBlocks,
   isLoading = false,
+  municipioId = "",
   totalParcelAreaHa,
   submitLabel = "Guardar y presentar resultado",
 }: Readonly<BlockEntryFormProps>) {
@@ -196,6 +203,10 @@ export function BlockEntryForm({
   const [varieties, setVarieties] = useState<Variety[]>([])
   const [lookupOptions, setLookupOptions] = useState<LookupOption[]>([])
   const [profiles, setProfiles] = useState<AgronomicProfile[]>([])
+  const [availabilityRows, setAvailabilityRows] = useState<MunicipioCropAvailability[]>([])
+  const [availabilityLoadedFor, setAvailabilityLoadedFor] = useState("")
+  const [isAvailabilityLoading, setIsAvailabilityLoading] = useState(false)
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null)
 
   useEffect(() => {
     async function loadCatalogs() {
@@ -222,10 +233,91 @@ export function BlockEntryForm({
   }, [supabase])
 
   useEffect(() => {
+    let isActive = true
+
+    async function loadAvailability() {
+      if (!municipioId) {
+        setAvailabilityRows([])
+        setAvailabilityLoadedFor("")
+        setAvailabilityError(null)
+        setIsAvailabilityLoading(false)
+        return
+      }
+
+      setIsAvailabilityLoading(true)
+      setAvailabilityError(null)
+      try {
+        const { data, error } = await supabase
+          .from("municipio_crop_availability")
+          .select("*")
+          .eq("municipio_id", municipioId)
+          .eq("active", true)
+          .returns<MunicipioCropAvailability[]>()
+
+        if (error) throw error
+        if (isActive) {
+          setAvailabilityRows(data || [])
+          setAvailabilityLoadedFor(municipioId)
+          setAvailabilityError(null)
+        }
+      } catch {
+        if (isActive) {
+          setAvailabilityRows([])
+          setAvailabilityLoadedFor(municipioId)
+          setAvailabilityError("No se pudieron cargar los cultivos disponibles para el municipio seleccionado.")
+        }
+      } finally {
+        if (isActive) setIsAvailabilityLoading(false)
+      }
+    }
+
+    loadAvailability()
+
+    return () => {
+      isActive = false
+    }
+  }, [municipioId, supabase])
+
+  useEffect(() => {
     onChange?.(blocks)
   }, [blocks, onChange])
 
+  useEffect(() => {
+    if (!municipioId || isAvailabilityLoading || availabilityError || availabilityLoadedFor !== municipioId) return
+
+    const availablePairs = new Set(
+      availabilityRows.map((row) => availabilityKey(row.crop_id, row.variety_id)),
+    )
+    const availableCropIds = new Set(availabilityRows.map((row) => row.crop_id))
+
+    setBlocks((current) => {
+      let changed = false
+      const next = current.map((block) => {
+        const selectedPairAvailable =
+          block.cropId && block.varietyId && availablePairs.has(availabilityKey(block.cropId, block.varietyId))
+        const selectedCropAvailable = block.cropId && !block.varietyId && availableCropIds.has(block.cropId)
+        if (!block.cropId || selectedPairAvailable || selectedCropAvailable) return block
+
+        changed = true
+        return {
+          ...block,
+          cropId: "",
+          varietyId: "",
+          rowDistanceM: "",
+          plantDistanceM: "",
+          plantingDensityPlantsHa: "",
+        }
+      })
+
+      return changed ? next : current
+    })
+  }, [availabilityError, availabilityLoadedFor, availabilityRows, isAvailabilityLoading, municipioId])
+
   const optionsByGroup = useMemo(() => optionGroups(lookupOptions), [lookupOptions])
+  const currentAvailabilityRows = availabilityLoadedFor === municipioId ? availabilityRows : []
+  const availableCropIds = new Set(currentAvailabilityRows.map((row) => row.crop_id))
+  const availablePairKeys = new Set(currentAvailabilityRows.map((row) => availabilityKey(row.crop_id, row.variety_id)))
+  const availableCrops = crops.filter((crop) => availableCropIds.has(crop.id))
   const totalBlockArea = blocks.reduce((sum, block) => sum + (toNumber(block.cropAreaHa) || 0), 0)
   const areaWarning =
     totalParcelAreaHa && totalBlockArea > totalParcelAreaHa
@@ -320,7 +412,11 @@ export function BlockEntryForm({
       const soilValueCopHa = block.soilValueCopHa.trim() ? toNumber(block.soilValueCopHa) : null
 
       if (!block.blockLabel.trim()) blockErrors.blockLabel = "El nombre del cultivo/lote es requerido"
-      if (!block.cropId) blockErrors.cropId = "El cultivo es requerido"
+      if (!municipioId) {
+        blockErrors.cropId = "Seleccione un municipio para consultar cultivos disponibles"
+      } else if (!block.cropId) {
+        blockErrors.cropId = "El cultivo es requerido"
+      }
       if (!block.varietyId) blockErrors.varietyId = "La variedad es requerida"
       if (!block.fitosanitaryCondition) blockErrors.fitosanitaryCondition = "La condición fitosanitaria es requerida"
       if (!block.ageYears.trim()) {
@@ -340,6 +436,9 @@ export function BlockEntryForm({
       }
       if (block.cropId && block.varietyId && !getProfile(block)) {
         blockErrors.varietyId = "La variedad seleccionada no está disponible para este cultivo"
+      }
+      if (block.cropId && block.varietyId && !availablePairKeys.has(availabilityKey(block.cropId, block.varietyId))) {
+        blockErrors.cropId = "El cultivo seleccionado no está disponible para el municipio"
       }
       if (landRentCopHaYear !== null && landRentCopHaYear < 0) {
         blockErrors.landRentCopHaYear = "El costo de arriendo debe ser mayor o igual a cero"
@@ -370,10 +469,23 @@ export function BlockEntryForm({
       {areaWarning ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{areaWarning}</div>
       ) : null}
+      {availabilityError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">{availabilityError}</div>
+      ) : null}
+      {municipioId && !isAvailabilityLoading && !availabilityError && availableCrops.length === 0 ? (
+        <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
+          No hay cultivos disponibles para el municipio seleccionado.
+        </div>
+      ) : null}
 
       <form onSubmit={handleSubmit} className="space-y-6" noValidate>
         {blocks.map((block, index) => {
-          const filteredVarieties = varieties.filter((variety) => variety.crop_id === block.cropId)
+          const availableVarietyIds = new Set(
+            currentAvailabilityRows.filter((row) => row.crop_id === block.cropId).map((row) => row.variety_id),
+          )
+          const filteredVarieties = varieties.filter(
+            (variety) => variety.crop_id === block.cropId && availableVarietyIds.has(variety.id),
+          )
           const profile = getProfile(block)
           const rowDistanceM = block.rowDistanceM || valueText(profile?.default_row_distance_m)
           const plantDistanceM = block.plantDistanceM || valueText(profile?.default_plant_distance_m)
@@ -415,8 +527,9 @@ export function BlockEntryForm({
                           className={errors[index]?.cropId ? "border-destructive" : ""}
                           required
                           invalid={Boolean(errors[index]?.cropId)}
-                          placeholder="Seleccione cultivo"
-                          options={crops.map((crop) => ({ value: crop.id, label: crop.name }))}
+                          placeholder={isAvailabilityLoading ? "Cargando cultivos" : "Seleccione cultivo"}
+                          disabled={!municipioId || isAvailabilityLoading || availableCrops.length === 0}
+                          options={availableCrops.map((crop) => ({ value: crop.id, label: crop.name }))}
                         />
                         {errors[index]?.cropId ? <p className="text-sm text-destructive">{errors[index]?.cropId}</p> : null}
                       </div>
@@ -431,7 +544,7 @@ export function BlockEntryForm({
                           required
                           invalid={Boolean(errors[index]?.varietyId)}
                           placeholder="Seleccione variedad"
-                          disabled={!block.cropId}
+                          disabled={!block.cropId || isAvailabilityLoading}
                           options={filteredVarieties.map((variety) => ({ value: variety.id, label: variety.name }))}
                         />
                         {errors[index]?.varietyId ? (
@@ -695,8 +808,8 @@ export function BlockEntryForm({
             Agregar Cultivo/Lote
           </Button>
 
-          <Button type="submit" disabled={isLoading} className="w-full sm:w-auto sm:min-w-32">
-            {isLoading ? "Guardando..." : submitLabel}
+          <Button type="submit" disabled={isLoading || isAvailabilityLoading} className="w-full sm:w-auto sm:min-w-32">
+            {isAvailabilityLoading ? "Cargando cultivos..." : isLoading ? "Guardando..." : submitLabel}
           </Button>
         </div>
       </form>

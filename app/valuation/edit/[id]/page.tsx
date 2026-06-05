@@ -9,7 +9,11 @@ import { Header } from "@/components/header"
 import { ParcelHeaderForm, type ParcelHeaderData } from "@/components/parcel-header-form"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ValuationCalculator } from "@/components/valuation-calculator"
+import {
+  saveValuation,
+  ValuationResultTables,
+  type SavedBlockResolution,
+} from "@/components/valuation-calculator"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
 import type { Database } from "@/types/database"
@@ -30,7 +34,10 @@ export default function EditValuationPage() {
   const [parcelData, setParcelData] = useState<ParcelHeaderData | null>(null)
   const [blockData, setBlockData] = useState<BlockData[] | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [isSavingValuation, setIsSavingValuation] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [savedBlocks, setSavedBlocks] = useState<SavedBlockResolution[]>([])
 
   useEffect(() => {
     async function loadExistingValuation() {
@@ -117,9 +124,27 @@ export default function EditValuationPage() {
     setCurrentStep("block-form")
   }
 
-  const handleBlockSubmit = (blocks: BlockData[]) => {
+  const handleBlockSubmit = async (blocks: BlockData[]) => {
     setBlockData(blocks)
     setCurrentStep("calculation")
+    setSavedBlocks([])
+    setSaveError(null)
+
+    if (!parcelData) {
+      setSaveError("No se pudieron preparar los datos del predio. Regrese y verifique el formulario.")
+      return
+    }
+
+    setIsSavingValuation(true)
+
+    try {
+      const result = await saveValuation({ supabase, parcelData, blockData: blocks, existingCaseId: params.id })
+      setSavedBlocks(result.persistedBlocks)
+    } catch (caught) {
+      setSaveError(caught instanceof Error ? caught.message : "No se pudo guardar la valuación.")
+    } finally {
+      setIsSavingValuation(false)
+    }
   }
 
   const goBack = () => {
@@ -206,7 +231,20 @@ export default function EditValuationPage() {
               </Button>
             </div>
 
-            <ValuationCalculator parcelData={parcelData} blockData={blockData} existingCaseId={params.id} />
+            {isSavingValuation ? (
+              <Card>
+                <CardContent className="py-8 text-sm text-muted-foreground">Actualizando valuación...</CardContent>
+              </Card>
+            ) : null}
+            {saveError ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>No se pudo guardar la valuación</CardTitle>
+                  <CardDescription>{saveError}</CardDescription>
+                </CardHeader>
+              </Card>
+            ) : null}
+            <ValuationResultTables savedBlocks={savedBlocks} />
           </div>
         </div>
       </div>
@@ -236,6 +274,9 @@ export default function EditValuationPage() {
               onSubmit={handleBlockSubmit}
               onChange={setBlockData}
               initialBlocks={blockData || undefined}
+              isLoading={isSavingValuation}
+              municipioId={parcelData.municipioId}
+              submitLabel="Actualizar y presentar resultado"
               totalParcelAreaHa={parseLocalizedNumberInput(parcelData.totalParcelAreaHa) ?? undefined}
             />
           </div>
