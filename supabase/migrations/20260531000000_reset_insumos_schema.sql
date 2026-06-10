@@ -15,6 +15,7 @@ DROP TABLE IF EXISTS public.yield_curve_points CASCADE;
 DROP TABLE IF EXISTS public.cost_template_lines CASCADE;
 DROP TABLE IF EXISTS public.municipio_crop_availability CASCADE;
 DROP TABLE IF EXISTS public.crop_variety_agronomic_profiles CASCADE;
+DROP TABLE IF EXISTS public.department_jornal_costs CASCADE;
 DROP TABLE IF EXISTS public.lookup_options CASCADE;
 DROP TABLE IF EXISTS public.production_stages CASCADE;
 DROP TABLE IF EXISTS public.municipios CASCADE;
@@ -29,6 +30,16 @@ CREATE TABLE public.departamentos (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   normalized_name TEXT NOT NULL,
+  active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE public.department_jornal_costs (
+  departamento_id TEXT PRIMARY KEY REFERENCES public.departamentos(id),
+  jornal_with_food_cop DECIMAL(18,6),
+  jornal_without_food_cop DECIMAL(18,6) NOT NULL,
+  source_sheet TEXT NOT NULL DEFAULT 'Jornalesdeppto',
+  source_row INTEGER NOT NULL,
+  source_row_data JSONB DEFAULT '{}'::jsonb,
   active BOOLEAN DEFAULT TRUE
 );
 
@@ -86,7 +97,6 @@ CREATE TABLE public.crop_variety_agronomic_profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   crop_id TEXT NOT NULL REFERENCES public.crops(id),
   variety_id TEXT NOT NULL REFERENCES public.varieties(id),
-  crop_variety_name TEXT NOT NULL,
 
   lifecycle_months DECIMAL(10,2),
   lifecycle_years DECIMAL(10,2),
@@ -188,7 +198,6 @@ CREATE TABLE public.input_price_rows (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   departamento_id TEXT REFERENCES public.departamentos(id),
-  departamento_name_source TEXT NOT NULL,
   input_group_name TEXT,
   input_name TEXT NOT NULL,
   normalized_input_name TEXT NOT NULL,
@@ -302,7 +311,7 @@ CREATE TABLE public.crop_appraisal_results (
   crop_block_id UUID NOT NULL UNIQUE REFERENCES public.crop_blocks(id) ON DELETE CASCADE,
 
   appraisal_rule TEXT NOT NULL
-    CHECK (appraisal_rule IN ('vegetative', 'pre_equilibrium', 'post_equilibrium')),
+    CHECK (appraisal_rule IN ('vegetative', 'pre_equilibrium', 'post_equilibrium', 'salvamento')),
   stage_id TEXT NOT NULL REFERENCES public.production_stages(id),
   discount_rate_method TEXT NOT NULL,
   discount_rate_ea DECIMAL(10,8) NOT NULL,
@@ -392,6 +401,10 @@ CREATE TABLE public.resolved_insumo_lines (
 CREATE INDEX idx_municipios_departamento
   ON public.municipios (departamento_id, normalized_name);
 
+CREATE INDEX idx_department_jornal_costs_active
+  ON public.department_jornal_costs (departamento_id)
+  WHERE active;
+
 CREATE INDEX idx_varieties_crop
   ON public.varieties (crop_id, normalized_name);
 
@@ -455,6 +468,7 @@ CREATE TRIGGER crop_blocks_set_updated_at
 
 -- Row-level security.
 ALTER TABLE public.departamentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.department_jornal_costs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.municipios ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.crops ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.varieties ENABLE ROW LEVEL SECURITY;
@@ -474,6 +488,9 @@ ALTER TABLE public.crop_appraisal_annual_flows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.resolved_insumo_lines ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "departamentos_select_all" ON public.departamentos
+  FOR SELECT TO authenticated USING (TRUE);
+
+CREATE POLICY "department_jornal_costs_select_all" ON public.department_jornal_costs
   FOR SELECT TO authenticated USING (TRUE);
 
 CREATE POLICY "municipios_select_all" ON public.municipios

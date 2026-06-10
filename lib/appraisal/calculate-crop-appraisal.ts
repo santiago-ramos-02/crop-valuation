@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
+import { equilibriumAgeFromAnnualFlows } from "@/lib/appraisal/equilibrium-year"
 import { normalizeText } from "@/lib/insumos/normalize"
+import { adjustedQuantityForSlope } from "@/lib/insumos/slope-adjustment"
 import type { ProductionStageId } from "@/lib/insumos/stage"
 import type { Database, Json } from "@/types/database"
 
@@ -11,7 +13,7 @@ type YieldCurvePoint = Database["public"]["Tables"]["yield_curve_points"]["Row"]
 type AppraisalResultInsert = Database["public"]["Tables"]["crop_appraisal_results"]["Insert"]
 type AppraisalFlowInsert = Database["public"]["Tables"]["crop_appraisal_annual_flows"]["Insert"]
 
-export type AppraisalRule = "vegetative" | "pre_equilibrium" | "post_equilibrium"
+export type AppraisalRule = "vegetative" | "pre_equilibrium" | "post_equilibrium" | "salvamento"
 
 export interface CropAppraisalAnnualFlow {
   lineOrder: number
@@ -79,6 +81,7 @@ export interface CalculateCropAppraisalInput {
   freshYieldKgHa: number | null
   jornalCostCop: number | null
   landRentCopHaYear: number | null
+  slopePercent: number | null
   discountRateMethod: string
   discountRateEa: number
 }
@@ -99,8 +102,14 @@ function firstPricesByInput(prices: InputPriceRow[]) {
   return byInput
 }
 
-function fixedPriceForLine(line: CostTemplateLine, jornalCostCop: number | null, landRentCopHaYear: number | null) {
+function fixedPriceForLine(
+  line: CostTemplateLine,
+  jornalCostCop: number | null,
+  defaultJornalCostCop: number | null,
+  landRentCopHaYear: number | null,
+) {
   if (line.unit_price_mode === "jornal_lookup" && jornalCostCop !== null) return jornalCostCop
+  if (line.unit_price_mode === "jornal_lookup" && defaultJornalCostCop !== null) return defaultJornalCostCop
 
   const inputGroup = normalizeText(line.input_group_name)
   const inputName = normalizeText(line.input_name)
@@ -119,15 +128,17 @@ function lineTotalCopHa(
   line: CostTemplateLine,
   pricesByInput: Map<string, InputPriceRow>,
   jornalCostCop: number | null,
+  defaultJornalCostCop: number | null,
   landRentCopHaYear: number | null,
+  slopePercent: number | null,
 ) {
-  const quantity = toNumber(line.quantity)
+  const quantity = adjustedQuantityForSlope(line, slopePercent)
   if (quantity === null) return { totalCopHa: 0, missingPrice: false }
 
   const price =
     line.unit_price_mode === "input_price_lookup"
       ? toNumber(pricesByInput.get(line.normalized_input_name || "")?.average_price_final_cop)
-      : fixedPriceForLine(line, jornalCostCop, landRentCopHaYear)
+      : fixedPriceForLine(line, jornalCostCop, defaultJornalCostCop, landRentCopHaYear)
 
   return {
     totalCopHa: price === null ? 0 : quantity * price,
@@ -139,7 +150,9 @@ function stageTotals(
   lines: CostTemplateLine[],
   pricesByInput: Map<string, InputPriceRow>,
   jornalCostCop: number | null,
+  defaultJornalCostCop: number | null,
   landRentCopHaYear: number | null,
+  slopePercent: number | null,
 ) {
   const totals: Record<ProductionStageId, number> = {
     establecimiento: 0,
@@ -150,7 +163,14 @@ function stageTotals(
   let missingCostLineCount = 0
 
   for (const line of lines) {
-    const { totalCopHa, missingPrice } = lineTotalCopHa(line, pricesByInput, jornalCostCop, landRentCopHaYear)
+    const { totalCopHa, missingPrice } = lineTotalCopHa(
+      line,
+      pricesByInput,
+      jornalCostCop,
+      defaultJornalCostCop,
+      landRentCopHaYear,
+      slopePercent,
+    )
     totals[line.stage_id] += totalCopHa
     if (missingPrice) missingCostLineCount += 1
   }
@@ -162,37 +182,33 @@ function currentAgeYear(ageYears: number) {
   return Math.max(1, Math.ceil(ageYears))
 }
 
+function costOpportunityPeriods(currentYear: number, flowAgeYears: number) {
+  return currentYear - flowAgeYears + 1
+}
+
 function annualCostForPoint(
   point: YieldCurvePoint,
   nextPoint: YieldCurvePoint | undefined,
   costTotals: Record<ProductionStageId, number>,
+  stageIdOverride?: ProductionStageId,
+  includeTransitionSalvage = true,
 ) {
-  const stageId = point.stage_id
+  const stageId = stageIdOverride ?? point.stage_id
   const salvageCost =
-    stageId === "mantenimiento" && nextPoint?.stage_id !== "mantenimiento" ? costTotals.salvamento : 0
+    includeTransitionSalvage && stageId === "mantenimiento" && nextPoint?.stage_id !== "mantenimiento"
+      ? costTotals.salvamento
+      : 0
   return costTotals[stageId] + salvageCost
-}
-
-function breakEvenAgeWithOpportunityCost(flows: CropAppraisalAnnualFlow[], discountRateEa: number) {
-  for (const flow of flows) {
-    const capitalizedNetThroughYear = flows
-      .filter((candidate) => candidate.ageYears <= flow.ageYears)
-      .reduce(
-        (sum, candidate) =>
-          sum + candidate.netFlowCopHa * (1 + discountRateEa) ** (flow.ageYears - candidate.ageYears),
-        0,
-      )
-    if (capitalizedNetThroughYear >= 0) return flow.ageYears
-  }
-  return null
 }
 
 function appraisedValueForRule(
   appraisalRule: AppraisalRule,
   vegetativeInvestmentCopHa: number,
   currentYearUtilityCopHa: number,
+  currentYearCostCopHa: number,
   pendingRecoveryCopHa: number,
 ) {
+  if (appraisalRule === "salvamento") return currentYearCostCopHa
   if (appraisalRule === "vegetative") return vegetativeInvestmentCopHa
   if (appraisalRule === "pre_equilibrium") return currentYearUtilityCopHa + pendingRecoveryCopHa
   return currentYearUtilityCopHa
@@ -213,6 +229,7 @@ export async function calculateCropAppraisal({
   freshYieldKgHa,
   jornalCostCop,
   landRentCopHaYear,
+  slopePercent,
   discountRateMethod,
   discountRateEa,
 }: CalculateCropAppraisalInput): Promise<CalculatedCropAppraisal> {
@@ -225,7 +242,7 @@ export async function calculateCropAppraisal({
     throw new Error("La tasa de descuento debe ser mayor o igual a cero.")
   }
 
-  const [templateRes, yieldRes] = await Promise.all([
+  const [templateRes, yieldRes, departmentJornalCostRes] = await Promise.all([
     supabase
       .from("cost_template_lines")
       .select("*")
@@ -240,10 +257,17 @@ export async function calculateCropAppraisal({
       .eq("variety_id", varietyId)
       .order("age_years", { ascending: true })
       .returns<YieldCurvePoint[]>(),
+    supabase
+      .from("department_jornal_costs")
+      .select("jornal_without_food_cop")
+      .eq("departamento_id", departamentoId)
+      .eq("active", true)
+      .maybeSingle(),
   ])
 
   if (templateRes.error) throw templateRes.error
   if (yieldRes.error) throw yieldRes.error
+  if (departmentJornalCostRes.error) throw departmentJornalCostRes.error
 
   const templateLines = templateRes.data || []
   const yieldPoints = yieldRes.data || []
@@ -273,38 +297,69 @@ export async function calculateCropAppraisal({
   }
 
   const pricesByInput = firstPricesByInput(priceRows)
-  const { totals, missingCostLineCount } = stageTotals(templateLines, pricesByInput, jornalCostCop, landRentCopHaYear)
+  const defaultJornalCostCop = toNumber(departmentJornalCostRes.data?.jornal_without_food_cop)
+  const { totals, missingCostLineCount } = stageTotals(
+    templateLines,
+    pricesByInput,
+    jornalCostCop,
+    defaultJornalCostCop,
+    landRentCopHaYear,
+    slopePercent,
+  )
   const currentYear = currentAgeYear(ageYears)
   const maxCurveAge = Math.max(...yieldPoints.map((point) => toNumber(point.age_years) || 0))
-  if (currentYear > maxCurveAge) {
-    throw new Error("La edad registrada supera la curva de rendimiento disponible para el cultivo.")
-  }
+  const usesSyntheticCurrentFlow = currentYear > maxCurveAge
+  const effectiveCurrentStageId: ProductionStageId = usesSyntheticCurrentFlow ? "salvamento" : currentStageId
+  const lastYieldPoint = yieldPoints[yieldPoints.length - 1]
+  const currentYieldKgHa = freshYieldKgHa !== null && freshYieldKgHa >= 0 ? freshYieldKgHa : 0
+  const flowPoints: YieldCurvePoint[] = usesSyntheticCurrentFlow
+    ? [
+        ...yieldPoints,
+        {
+          ...lastYieldPoint,
+          id: `${lastYieldPoint.id}:salvamento:${currentYear}`,
+          age_years: String(currentYear),
+          stage_id: "salvamento",
+          potential_yield_kg_ha: String(currentYieldKgHa),
+          source_sheet: "Salvamento calculado",
+          source_row: lastYieldPoint.source_row,
+          source_row_data: null,
+        },
+      ]
+    : yieldPoints
 
   const factor = fitosanitaryFactor ?? 1
   let cumulativeNetFlowCopHa = 0
-  const annualFlows = yieldPoints.map((point, index): CropAppraisalAnnualFlow => {
+  const annualFlows = flowPoints.map((point, index): CropAppraisalAnnualFlow => {
     const pointAge = toNumber(point.age_years) || index + 1
     const potentialYield = toNumber(point.potential_yield_kg_ha) || 0
     const curveYield = potentialYield * factor
     const isCurrentYear = pointAge === currentYear
     const adjustedYieldKgHa = isCurrentYear && freshYieldKgHa !== null && freshYieldKgHa >= 0 ? freshYieldKgHa : curveYield
     const revenueCopHa = adjustedYieldKgHa * commercialPriceCopKg
-    const costCopHa = annualCostForPoint(point, yieldPoints[index + 1], totals)
+    const stageId = isCurrentYear ? effectiveCurrentStageId : point.stage_id
+    const costCopHa = annualCostForPoint(
+      point,
+      flowPoints[index + 1],
+      totals,
+      stageId,
+      !usesSyntheticCurrentFlow,
+    )
     const netFlowCopHa = revenueCopHa - costCopHa
     cumulativeNetFlowCopHa += netFlowCopHa
 
     const isPastOrCurrent = pointAge <= currentYear
     const isRemainingYear = pointAge >= currentYear
-    const yearsToCurrent = currentYear - pointAge
+    const opportunityPeriods = costOpportunityPeriods(currentYear, pointAge)
     const remainingIndex = pointAge - currentYear + 1
-    const investmentFutureValueCopHa = isPastOrCurrent ? costCopHa * (1 + discountRateEa) ** yearsToCurrent : null
-    const capitalizedNetFlow = isPastOrCurrent ? netFlowCopHa * (1 + discountRateEa) ** yearsToCurrent : null
+    const investmentFutureValueCopHa = isPastOrCurrent ? costCopHa * (1 + discountRateEa) ** opportunityPeriods : null
+    const capitalizedNetFlow = isPastOrCurrent ? netFlowCopHa * (1 + discountRateEa) ** opportunityPeriods : null
     const discountFactor = isRemainingYear ? (1 + discountRateEa) ** remainingIndex : null
 
     return {
       lineOrder: index + 1,
       ageYears: pointAge,
-      stageId: point.stage_id,
+      stageId,
       potentialYieldKgHa: potentialYield,
       adjustedYieldKgHa,
       revenueCopHa,
@@ -323,30 +378,41 @@ export async function calculateCropAppraisal({
   const currentFlow = annualFlows.find((flow) => flow.ageYears === currentYear)
   if (!currentFlow) throw new Error("No se encontró el año actual dentro de la curva de rendimiento.")
 
-  const harvestStartYear = toNumber(profile.harvest_start_year)
-  const startedProducing =
-    harvestStartYear !== null && harvestStartYear > 0 ? ageYears >= harvestStartYear : currentFlow.adjustedYieldKgHa > 0
+  const startedProducing = currentFlow.adjustedYieldKgHa > 0
 
   const capitalizedNetThroughCurrent = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
-    .reduce((sum, flow) => sum + flow.netFlowCopHa * (1 + discountRateEa) ** (currentYear - flow.ageYears), 0)
+    .reduce(
+      (sum, flow) =>
+        sum + flow.netFlowCopHa * (1 + discountRateEa) ** costOpportunityPeriods(currentYear, flow.ageYears),
+      0,
+    )
   const vegetativeInvestmentCopHa = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
-    .reduce((sum, flow) => sum + flow.costCopHa * (1 + discountRateEa) ** (currentYear - flow.ageYears), 0)
-  const pendingRecoveryCopHa = Math.max(0, -capitalizedNetThroughCurrent)
-  const foundBreakEvenAge = breakEvenAgeWithOpportunityCost(annualFlows, discountRateEa)
+    .reduce(
+      (sum, flow) =>
+        sum + flow.costCopHa * (1 + discountRateEa) ** costOpportunityPeriods(currentYear, flow.ageYears),
+      0,
+    )
+  const pendingRecoveryBeforeRuleCopHa = Math.max(0, -capitalizedNetThroughCurrent)
+  const pendingRecoveryCopHa = effectiveCurrentStageId === "salvamento" ? 0 : pendingRecoveryBeforeRuleCopHa
+  const foundBreakEvenAge = equilibriumAgeFromAnnualFlows(annualFlows) ?? toNumber(profile.harvest_start_year)
   const breakEvenReached = capitalizedNetThroughCurrent >= 0
   const remainingNpvCopHa = annualFlows.reduce((sum, flow) => sum + (flow.presentValueCopHa || 0), 0)
-  const appraisalRule: AppraisalRule = !startedProducing
-    ? "vegetative"
-    : breakEvenReached
-      ? "post_equilibrium"
-      : "pre_equilibrium"
+  const appraisalRule: AppraisalRule =
+    effectiveCurrentStageId === "salvamento"
+      ? "salvamento"
+      : !startedProducing
+        ? "vegetative"
+        : breakEvenReached
+          ? "post_equilibrium"
+          : "pre_equilibrium"
 
   const decisionTreeValueCopHa = appraisedValueForRule(
     appraisalRule,
     vegetativeInvestmentCopHa,
     currentFlow.netFlowCopHa,
+    currentFlow.costCopHa,
     pendingRecoveryCopHa,
   )
   const vegetativeFinalValueCopHa = vegetativeInvestmentCopHa
@@ -359,7 +425,7 @@ export async function calculateCropAppraisal({
 
   return {
     appraisalRule,
-    stageId: currentStageId,
+    stageId: effectiveCurrentStageId,
     discountRateMethod,
     discountRateEa,
     startedProducing,
@@ -435,7 +501,7 @@ function flowCostDelta(
 ) {
   const stageDelta = stageCostDeltasCopHa[flow.stageId] || 0
   const salvageDelta =
-    flow.stageId === "mantenimiento" && nextFlow?.stageId !== "mantenimiento"
+    flow.stageId === "mantenimiento" && nextFlow?.stageId !== "mantenimiento" && !nextFlow?.isCurrentYear
       ? stageCostDeltasCopHa.salvamento || 0
       : 0
 
@@ -460,10 +526,14 @@ export function recalculateCropAppraisalWithCostDeltas(
     cumulativeNetFlowCopHa += netFlowCopHa
 
     const isPastOrCurrent = flow.ageYears <= currentYear
-    const yearsToCurrent = currentYear - flow.ageYears
+    const opportunityPeriods = costOpportunityPeriods(currentYear, flow.ageYears)
     const remainingIndex = flow.ageYears - currentYear + 1
-    const investmentFutureValueCopHa = isPastOrCurrent ? costCopHa * (1 + appraisal.discountRateEa) ** yearsToCurrent : null
-    const capitalizedNetFlow = isPastOrCurrent ? netFlowCopHa * (1 + appraisal.discountRateEa) ** yearsToCurrent : null
+    const investmentFutureValueCopHa = isPastOrCurrent
+      ? costCopHa * (1 + appraisal.discountRateEa) ** opportunityPeriods
+      : null
+    const capitalizedNetFlow = isPastOrCurrent
+      ? netFlowCopHa * (1 + appraisal.discountRateEa) ** opportunityPeriods
+      : null
     const discountFactor = flow.isRemainingYear ? (1 + appraisal.discountRateEa) ** remainingIndex : null
 
     return {
@@ -483,23 +553,36 @@ export function recalculateCropAppraisalWithCostDeltas(
 
   const capitalizedNetThroughCurrent = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
-    .reduce((sum, flow) => sum + flow.netFlowCopHa * (1 + appraisal.discountRateEa) ** (currentYear - flow.ageYears), 0)
+    .reduce(
+      (sum, flow) =>
+        sum + flow.netFlowCopHa * (1 + appraisal.discountRateEa) ** costOpportunityPeriods(currentYear, flow.ageYears),
+      0,
+    )
   const vegetativeInvestmentCopHa = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
-    .reduce((sum, flow) => sum + flow.costCopHa * (1 + appraisal.discountRateEa) ** (currentYear - flow.ageYears), 0)
-  const pendingRecoveryCopHa = Math.max(0, -capitalizedNetThroughCurrent)
+    .reduce(
+      (sum, flow) =>
+        sum + flow.costCopHa * (1 + appraisal.discountRateEa) ** costOpportunityPeriods(currentYear, flow.ageYears),
+      0,
+    )
+  const pendingRecoveryBeforeRuleCopHa = Math.max(0, -capitalizedNetThroughCurrent)
+  const pendingRecoveryCopHa = appraisal.stageId === "salvamento" ? 0 : pendingRecoveryBeforeRuleCopHa
   const breakEvenReached = capitalizedNetThroughCurrent >= 0
   const remainingNpvCopHa = annualFlows.reduce((sum, flow) => sum + (flow.presentValueCopHa || 0), 0)
-  const appraisalRule: AppraisalRule = !appraisal.startedProducing
-    ? "vegetative"
-    : breakEvenReached
-      ? "post_equilibrium"
-      : "pre_equilibrium"
+  const appraisalRule: AppraisalRule =
+    appraisal.stageId === "salvamento"
+      ? "salvamento"
+      : !appraisal.startedProducing
+        ? "vegetative"
+        : breakEvenReached
+          ? "post_equilibrium"
+          : "pre_equilibrium"
 
   const decisionTreeValueCopHa = appraisedValueForRule(
     appraisalRule,
     vegetativeInvestmentCopHa,
     currentFlow.netFlowCopHa,
+    currentFlow.costCopHa,
     pendingRecoveryCopHa,
   )
   const vegetativeFinalValueCopHa = vegetativeInvestmentCopHa
@@ -516,7 +599,7 @@ export function recalculateCropAppraisalWithCostDeltas(
     ...appraisal,
     appraisalRule,
     breakEvenReached,
-    breakEvenAgeYears: breakEvenAgeWithOpportunityCost(annualFlows, appraisal.discountRateEa),
+    breakEvenAgeYears: equilibriumAgeFromAnnualFlows(annualFlows) ?? appraisal.breakEvenAgeYears,
     currentYearCostCopHa: currentFlow.costCopHa,
     currentYearUtilityCopHa: currentFlow.netFlowCopHa,
     vegetativeInvestmentCopHa,

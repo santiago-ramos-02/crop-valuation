@@ -1,0 +1,43 @@
+-- Department jornal costs from 20260607Aplicativo.xlsx, sheet Jornalesdeppto.
+-- The app uses Jornal agricola, sin alimentacion as the default labor fallback.
+
+INSERT INTO public.department_jornal_costs (departamento_id, jornal_with_food_cop, jornal_without_food_cop, source_sheet, source_row, source_row_data, active) VALUES
+  ('antioquia', 0, 73689.81481481527, 'Jornalesdeppto', 9, '{"Etiqueta": "Antioquia", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 73689.81481481527}'::jsonb, TRUE),
+  ('atlantico', 32500.000000025, 35916.666666675, 'Jornalesdeppto', 17, '{"Etiqueta": "Atlántico", "Jornal agricola con alimentacion": 32500.000000025, "Jornal agricola sin alimentacion": 35916.666666675}'::jsonb, TRUE),
+  ('bogota_d_c', 0, 78000, 'Jornalesdeppto', 221, '{"Etiqueta": "Bogotá, D.C.", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE),
+  ('bolivar', 34625.0000000125, 40150.00000001, 'Jornalesdeppto', 23, '{"Etiqueta": "Bolívar", "Jornal agricola con alimentacion": 34625.0000000125, "Jornal agricola sin alimentacion": 40150.00000001}'::jsonb, TRUE),
+  ('boyaca', 58714.91228070527, 68205.88235294558, 'Jornalesdeppto', 25, '{"Etiqueta": "Boyacá", "Jornal agricola con alimentacion": 58714.91228070527, "Jornal agricola sin alimentacion": 68205.88235294558}'::jsonb, TRUE),
+  ('caldas', 56515.151515154546, 64047.61904761428, 'Jornalesdeppto', 32, '{"Etiqueta": "Caldas", "Jornal agricola con alimentacion": 56515.151515154546, "Jornal agricola sin alimentacion": 64047.61904761428}'::jsonb, TRUE),
+  ('caqueta', 49761.9047619, 69222.22222222666, 'Jornalesdeppto', 34, '{"Etiqueta": "Caquetá", "Jornal agricola con alimentacion": 49761.9047619, "Jornal agricola sin alimentacion": 69222.22222222666}'::jsonb, TRUE),
+  ('cauca', 35000, 46666.666666666664, 'Jornalesdeppto', 38, '{"Etiqueta": "Cauca", "Jornal agricola con alimentacion": 35000, "Jornal agricola sin alimentacion": 46666.666666666664}'::jsonb, TRUE),
+  ('cesar', 36296.2962963, 51613.72549019412, 'Jornalesdeppto', 40, '{"Etiqueta": "Cesar", "Jornal agricola con alimentacion": 36296.2962963, "Jornal agricola sin alimentacion": 51613.72549019412}'::jsonb, TRUE),
+  ('cordoba', 0, 38916.666666674995, 'Jornalesdeppto', 50, '{"Etiqueta": "Córdoba", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 38916.666666674995}'::jsonb, TRUE),
+  ('cundinamarca', 63742.69005847895, 72606.38297872448, 'Jornalesdeppto', 56, '{"Etiqueta": "Cundinamarca", "Jornal agricola con alimentacion": 63742.69005847895, "Jornal agricola sin alimentacion": 72606.38297872448}'::jsonb, TRUE),
+  ('choco', 0, 78000, 'Jornalesdeppto', 222, '{"Etiqueta": "Chocó", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE),
+  ('huila', 52083.333333337505, 73020.83333333126, 'Jornalesdeppto', 89, '{"Etiqueta": "Huila", "Jornal agricola con alimentacion": 52083.333333337505, "Jornal agricola sin alimentacion": 73020.83333333126}'::jsonb, TRUE),
+  ('la_guajira', 0, 78000, 'Jornalesdeppto', 225, '{"Etiqueta": "La Guajira", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE),
+  ('magdalena', 30833.333333337505, 35874.9999999875, 'Jornalesdeppto', 110, '{"Etiqueta": "Magdalena", "Jornal agricola con alimentacion": 30833.333333337505, "Jornal agricola sin alimentacion": 35874.9999999875}'::jsonb, TRUE),
+  ('meta', 40194.444444441666, 53333.333333333336, 'Jornalesdeppto', 117, '{"Etiqueta": "Meta", "Jornal agricola con alimentacion": 40194.444444441666, "Jornal agricola sin alimentacion": 53333.333333333336}'::jsonb, TRUE),
+  ('narino', 37066.666666663994, 47166.666666666664, 'Jornalesdeppto', 122, '{"Etiqueta": "Nariño", "Jornal agricola con alimentacion": 37066.666666663994, "Jornal agricola sin alimentacion": 47166.666666666664}'::jsonb, TRUE),
+  ('norte_de_santander', 48333.333333333336, 61428.57142857143, 'Jornalesdeppto', 126, '{"Etiqueta": "Norte de Santander", "Jornal agricola con alimentacion": 48333.333333333336, "Jornal agricola sin alimentacion": 61428.57142857143}'::jsonb, TRUE),
+  ('quindio', 0, 58300.000000006665, 'Jornalesdeppto', 148, '{"Etiqueta": "Quindío", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 58300.000000006665}'::jsonb, TRUE),
+  ('risaralda', 47125, 67007.8125, 'Jornalesdeppto', 153, '{"Etiqueta": "Risaralda", "Jornal agricola con alimentacion": 47125, "Jornal agricola sin alimentacion": 67007.8125}'::jsonb, TRUE),
+  ('santander', 42346.666666666, 62106.666666668, 'Jornalesdeppto', 174, '{"Etiqueta": "Santander", "Jornal agricola con alimentacion": 42346.666666666, "Jornal agricola sin alimentacion": 62106.666666668}'::jsonb, TRUE),
+  ('sucre', 35333.333333333336, 40277.777777774994, 'Jornalesdeppto', 190, '{"Etiqueta": "Sucre", "Jornal agricola con alimentacion": 35333.333333333336, "Jornal agricola sin alimentacion": 40277.777777774994}'::jsonb, TRUE),
+  ('tolima', 56614.583333337505, 67437.5, 'Jornalesdeppto', 199, '{"Etiqueta": "Tolima", "Jornal agricola con alimentacion": 56614.583333337505, "Jornal agricola sin alimentacion": 67437.5}'::jsonb, TRUE),
+  ('valle_del_cauca', 42694.444444441666, 57760, 'Jornalesdeppto', 206, '{"Etiqueta": "Valle del Cauca", "Jornal agricola con alimentacion": 42694.444444441666, "Jornal agricola sin alimentacion": 57760}'::jsonb, TRUE),
+  ('arauca', 49166.66666665999, 71083.333333335, 'Jornalesdeppto', 13, '{"Etiqueta": "Arauca", "Jornal agricola con alimentacion": 49166.66666665999, "Jornal agricola sin alimentacion": 71083.333333335}'::jsonb, TRUE),
+  ('casanare', 54687.5, 66250, 'Jornalesdeppto', 37, '{"Etiqueta": "Casanare", "Jornal agricola con alimentacion": 54687.5, "Jornal agricola sin alimentacion": 66250}'::jsonb, TRUE),
+  ('putumayo', 0, 43750, 'Jornalesdeppto', 146, '{"Etiqueta": "Putumayo", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 43750}'::jsonb, TRUE),
+  ('amazonas', 0, 78000, 'Jornalesdeppto', 220, '{"Etiqueta": "Amazonas", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE),
+  ('guainia', 0, 78000, 'Jornalesdeppto', 223, '{"Etiqueta": "Guainía", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE),
+  ('guaviare', 0, 78000, 'Jornalesdeppto', 224, '{"Etiqueta": "Guaviare", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE),
+  ('vaupes', 0, 78000, 'Jornalesdeppto', 226, '{"Etiqueta": "Vaupés", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE),
+  ('vichada', 0, 78000, 'Jornalesdeppto', 227, '{"Etiqueta": "Vichada", "Jornal agricola con alimentacion": 0, "Jornal agricola sin alimentacion": 78000}'::jsonb, TRUE)
+ON CONFLICT (departamento_id) DO UPDATE SET
+  jornal_with_food_cop = EXCLUDED.jornal_with_food_cop,
+  jornal_without_food_cop = EXCLUDED.jornal_without_food_cop,
+  source_sheet = EXCLUDED.source_sheet,
+  source_row = EXCLUDED.source_row,
+  source_row_data = EXCLUDED.source_row_data,
+  active = EXCLUDED.active;

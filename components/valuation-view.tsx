@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { PRODUCTION_STAGE_LABELS, type ProductionStageId } from "@/lib/insumos/stage"
+import { projectedEquilibriumAgeYears } from "@/lib/appraisal/equilibrium-year"
+import { PRODUCTION_STAGE_LABELS, isProductionStageId, productionStageBadgeClassName } from "@/lib/insumos/stage"
 import { createClient } from "@/lib/supabase/client"
 import type { Database } from "@/types/database"
 
@@ -17,6 +18,8 @@ type ValuationCase = Database["public"]["Tables"]["valuation_cases"]["Row"]
 type CropBlock = Database["public"]["Tables"]["crop_blocks"]["Row"]
 type ResolvedLine = Database["public"]["Tables"]["resolved_insumo_lines"]["Row"]
 type AppraisalResult = Database["public"]["Tables"]["crop_appraisal_results"]["Row"]
+type AnnualFlow = Database["public"]["Tables"]["crop_appraisal_annual_flows"]["Row"]
+type AgronomicProfile = Database["public"]["Tables"]["crop_variety_agronomic_profiles"]["Row"]
 type Departamento = Database["public"]["Tables"]["departamentos"]["Row"]
 type Municipio = Database["public"]["Tables"]["municipios"]["Row"]
 type Crop = Database["public"]["Tables"]["crops"]["Row"]
@@ -27,6 +30,8 @@ interface ViewState {
   blocks: CropBlock[]
   linesByBlock: Record<string, ResolvedLine[]>
   appraisalsByBlock: Record<string, AppraisalResult>
+  flowsByBlock: Record<string, AnnualFlow[]>
+  profilesByCropVariety: Map<string, AgronomicProfile>
   departamento: Departamento | null
   municipio: Municipio | null
   cropsById: Map<string, Crop>
@@ -42,6 +47,8 @@ const initialState: ViewState = {
   blocks: [],
   linesByBlock: {},
   appraisalsByBlock: {},
+  flowsByBlock: {},
+  profilesByCropVariety: new Map(),
   departamento: null,
   municipio: null,
   cropsById: new Map(),
@@ -76,6 +83,10 @@ function viewReducer(state: ViewState, action: { type: "loading" } | { type: "lo
   return { ...action.payload, isLoading: false, error: null }
 }
 
+function cropVarietyKey(cropId: string, varietyId: string) {
+  return `${cropId}::${varietyId}`
+}
+
 function formatDate(dateString: string) {
   return dateFormatter.format(new Date(dateString))
 }
@@ -100,10 +111,39 @@ function formatCurrency(value: string | number | null | undefined) {
 }
 
 function formatPercent(value: string | number | null | undefined) {
-  if (value === null || value === undefined || value === "") return ""
+  if (value === null || value === undefined || value === "") return "No disponible"
   const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return ""
+  if (!Number.isFinite(parsed)) return "No disponible"
   return percentFormatter.format(parsed)
+}
+
+function parseDisplayNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function formatEquilibriumYear(value: string | number | null | undefined) {
+  const parsed = parseDisplayNumber(value)
+  return parsed === null ? "No disponible" : `Año ${formatNumber(parsed)}`
+}
+
+function displayBreakEvenAge(
+  appraisal: AppraisalResult,
+  annualFlows: AnnualFlow[] = [],
+  profile?: AgronomicProfile,
+) {
+  return projectedEquilibriumAgeYears({
+    annualFlows: annualFlows.map((flow) => ({
+      ageYears: flow.age_years,
+      netFlowCopHa: flow.net_flow_cop_ha,
+    })),
+    breakEvenAgeYears: appraisal.break_even_age_years,
+    currentAgeYears: appraisal.current_age_years,
+    currentYearUtilityCopHa: appraisal.current_year_utility_cop_ha,
+    pendingRecoveryCopHa: appraisal.pending_recovery_cop_ha,
+    referenceAgeYears: profile?.harvest_start_year,
+  })
 }
 
 function formatDisplayLabel(value: string | null | undefined) {
@@ -114,15 +154,85 @@ function formatDisplayLabel(value: string | null | undefined) {
 
 function formatStageLabel(stageId: string | null | undefined) {
   if (!stageId) return "Sin etapa"
-  return PRODUCTION_STAGE_LABELS[stageId as ProductionStageId] || formatDisplayLabel(stageId)
+  return isProductionStageId(stageId) ? PRODUCTION_STAGE_LABELS[stageId] : formatDisplayLabel(stageId)
 }
 
 function firstCropLabel(blocks: CropBlock[], cropsById: Map<string, Crop>, varietiesById: Map<string, Variety>) {
   const block = blocks[0]
   if (!block) return null
-  return `${cropsById.get(block.crop_id)?.name || block.crop_id} ${
-    varietiesById.get(block.variety_id)?.name || block.variety_id
-  }`
+  const cropName = cropsById.get(block.crop_id)?.name || "Sin cultivo"
+  const varietyName = varietiesById.get(block.variety_id)?.name || ""
+  return `${cropName} ${varietyName}`.trim()
+}
+
+function metricValueClassName(value: number) {
+  if (value > 0) return "text-emerald-700"
+  if (value < 0) return "text-red-700"
+  return "text-foreground"
+}
+
+function hasPendingRecovery(value: string | number | null | undefined) {
+  return toNumber(value) > 0
+}
+
+function appraisalBasisLabel(appraisalRule: AppraisalResult["appraisal_rule"]) {
+  if (appraisalRule === "salvamento") return "Valor de salvamento"
+  if (appraisalRule === "vegetative") return "Inversión acumulada"
+  if (appraisalRule === "pre_equilibrium") return "Utilidad + pendiente"
+  return "Utilidad del año"
+}
+
+function buildValuationSummary(
+  blocks: CropBlock[],
+  appraisalsByBlock: Record<string, AppraisalResult>,
+) {
+  const appraisedBlocks = blocks.flatMap((block) => {
+    const appraisal = appraisalsByBlock[block.id]
+    return appraisal ? [{ block, appraisal }] : []
+  })
+
+  const totalAppraisedValue = appraisedBlocks.reduce(
+    (sum, { appraisal }) => sum + toNumber(appraisal.appraised_value_cop),
+    0,
+  )
+  const totalAreaHa = appraisedBlocks.reduce((sum, { appraisal }) => sum + toNumber(appraisal.crop_area_ha), 0)
+  const averageValueCopHa = totalAreaHa > 0 ? totalAppraisedValue / totalAreaHa : null
+  const totalRevenueCop = appraisedBlocks.reduce(
+    (sum, { appraisal }) => sum + toNumber(appraisal.current_year_revenue_cop_ha) * toNumber(appraisal.crop_area_ha),
+    0,
+  )
+  const totalCostCop = appraisedBlocks.reduce(
+    (sum, { appraisal }) => sum + toNumber(appraisal.current_year_cost_cop_ha) * toNumber(appraisal.crop_area_ha),
+    0,
+  )
+  const totalUtilityCop = appraisedBlocks.reduce(
+    (sum, { appraisal }) => sum + toNumber(appraisal.current_year_utility_cop_ha) * toNumber(appraisal.crop_area_ha),
+    0,
+  )
+  const totalPendingRecoveryCop = appraisedBlocks.reduce(
+    (sum, { appraisal }) =>
+      appraisal.stage_id === "salvamento"
+        ? sum
+        : sum + toNumber(appraisal.pending_recovery_cop_ha) * toNumber(appraisal.crop_area_ha),
+    0,
+  )
+  const totalPlants = appraisedBlocks.reduce((sum, { appraisal }) => {
+    const density = toNumber(appraisal.density_plants_ha)
+    return density > 0 ? sum + density * toNumber(appraisal.crop_area_ha) : sum
+  }, 0)
+  const averageValueCopPerPlant = totalPlants > 0 ? totalAppraisedValue / totalPlants : null
+  const utilityMargin = totalRevenueCop > 0 ? totalUtilityCop / totalRevenueCop : null
+  return {
+    averageValueCopHa,
+    averageValueCopPerPlant,
+    totalAppraisedValue,
+    totalAreaHa,
+    totalCostCop,
+    totalPendingRecoveryCop,
+    totalRevenueCop,
+    totalUtilityCop,
+    utilityMargin,
+  }
 }
 
 async function loadValuationViewData(
@@ -152,7 +262,7 @@ async function loadValuationViewData(
   const varietyIds = Array.from(new Set(blocks.map((block) => block.variety_id)))
   const blockIds = blocks.map((block) => block.id)
 
-  const [departamentoRes, municipioRes, cropsRes, varietiesRes, linesRes, appraisalsRes] = await Promise.all([
+  const [departamentoRes, municipioRes, cropsRes, varietiesRes, profilesRes, linesRes, appraisalsRes, flowsRes] = await Promise.all([
     supabase.from("departamentos").select("*").eq("id", caseData.departamento_id).returns<Departamento>().maybeSingle(),
     supabase.from("municipios").select("*").eq("id", caseData.municipio_id).returns<Municipio>().maybeSingle(),
     cropIds.length
@@ -161,6 +271,14 @@ async function loadValuationViewData(
     varietyIds.length
       ? supabase.from("varieties").select("*").in("id", varietyIds).returns<Variety[]>()
       : Promise.resolve({ data: [] as Variety[], error: null }),
+    cropIds.length && varietyIds.length
+      ? supabase
+          .from("crop_variety_agronomic_profiles")
+          .select("*")
+          .in("crop_id", cropIds)
+          .in("variety_id", varietyIds)
+          .returns<AgronomicProfile[]>()
+      : Promise.resolve({ data: [] as AgronomicProfile[], error: null }),
     blockIds.length
       ? supabase
           .from("resolved_insumo_lines")
@@ -172,12 +290,24 @@ async function loadValuationViewData(
     blockIds.length
       ? supabase.from("crop_appraisal_results").select("*").in("crop_block_id", blockIds).returns<AppraisalResult[]>()
       : Promise.resolve({ data: [] as AppraisalResult[], error: null }),
+    blockIds.length
+      ? supabase
+          .from("crop_appraisal_annual_flows")
+          .select("*")
+          .in("crop_block_id", blockIds)
+          .order("line_order", { ascending: true })
+          .returns<AnnualFlow[]>()
+      : Promise.resolve({ data: [] as AnnualFlow[], error: null }),
   ])
 
+  if (departamentoRes.error) throw departamentoRes.error
+  if (municipioRes.error) throw municipioRes.error
   if (cropsRes.error) throw cropsRes.error
   if (varietiesRes.error) throw varietiesRes.error
+  if (profilesRes.error) throw profilesRes.error
   if (linesRes.error) throw linesRes.error
   if (appraisalsRes.error) throw appraisalsRes.error
+  if (flowsRes.error) throw flowsRes.error
 
   const linesByBlock: Record<string, ResolvedLine[]> = {}
   for (const line of linesRes.data || []) {
@@ -189,11 +319,20 @@ async function loadValuationViewData(
     appraisalsByBlock[appraisal.crop_block_id] = appraisal
   }
 
+  const flowsByBlock: Record<string, AnnualFlow[]> = {}
+  for (const flow of flowsRes.data || []) {
+    flowsByBlock[flow.crop_block_id] = [...(flowsByBlock[flow.crop_block_id] || []), flow]
+  }
+
   return {
     valuationCase: caseData,
     blocks,
     linesByBlock,
     appraisalsByBlock,
+    flowsByBlock,
+    profilesByCropVariety: new Map(
+      (profilesRes.data || []).map((profile) => [cropVarietyKey(profile.crop_id, profile.variety_id), profile]),
+    ),
     departamento: departamentoRes.data || null,
     municipio: municipioRes.data || null,
     cropsById: new Map((cropsRes.data || []).map((crop) => [crop.id, crop])),
@@ -205,12 +344,12 @@ function ValuationViewHeader({ caseCode, caseId }: Readonly<{ caseCode: string |
   const router = useRouter()
 
   return (
-    <div className="flex items-center justify-between">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="min-w-0 space-y-2">
         <h1 className="text-3xl font-bold text-balance">Resultados de Valuación</h1>
         <p className="text-muted-foreground text-pretty">Análisis de valuación para el predio: {caseCode || caseId}</p>
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2 lg:justify-end">
         <Button variant="outline" onClick={() => router.push("/dashboard")} className="flex items-center gap-2">
           <ArrowLeftIcon className="h-4 w-4" />
           Volver al Panel
@@ -229,7 +368,7 @@ function ValuationSummaryBand({
   cropsById,
   departamento,
   municipio,
-  totalAppraisedValue,
+  summary,
   valuationCase,
   varietiesById,
 }: Readonly<{
@@ -237,46 +376,105 @@ function ValuationSummaryBand({
   cropsById: Map<string, Crop>
   departamento: Departamento | null
   municipio: Municipio | null
-  totalAppraisedValue: number
+  summary: ReturnType<typeof buildValuationSummary>
   valuationCase: ValuationCase
   varietiesById: Map<string, Variety>
 }>) {
+  const cropLabel = firstCropLabel(blocks, cropsById, varietiesById)
+  const hasTotalPendingRecovery = hasPendingRecovery(summary.totalPendingRecoveryCop)
+
   return (
-    <Card className="gap-0 py-0">
-      <CardContent className="p-0">
-        <dl className="grid divide-y text-sm md:grid-cols-[1.25fr_1fr_1fr_1fr] md:divide-x md:divide-y-0">
-          <div className="flex min-h-16 items-center gap-3 px-4 py-3">
-            <MapPin className="h-4 w-4 shrink-0 text-slate-400" />
+    <Card className="gap-3 py-5">
+      <CardHeader>
+        <CardTitle>Resumen del predio</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid gap-5 sm:grid-cols-[minmax(220px,0.9fr)_minmax(0,1fr)]">
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">Avalúo final del predio</div>
+              <div className="text-4xl font-semibold tracking-normal text-emerald-700">
+                {formatCurrency(summary.totalAppraisedValue)}
+              </div>
+            </div>
+
+            <dl className="grid gap-x-5 gap-y-3 border-t pt-4 sm:grid-cols-2 sm:border-t-0 sm:pt-0">
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Área valorada</dt>
+                <dd className="text-base font-semibold">{formatNumber(summary.totalAreaHa)} ha</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Valor promedio por ha</dt>
+                <dd className="text-base font-semibold">{formatCurrency(summary.averageValueCopHa)}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Promedio por planta</dt>
+                <dd className="text-base font-semibold">{formatCurrency(summary.averageValueCopPerPlant)}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Cultivos/Lotes</dt>
+                <dd className="text-base font-semibold">{blocks.length}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div className="border-t pt-5 lg:border-t-0 lg:border-l lg:pl-6 lg:pt-0">
+            <div className="mb-3 text-sm font-medium">Resultado económico</div>
+            <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Ingreso año actual</dt>
+                <dd className="text-base font-semibold">{formatCurrency(summary.totalRevenueCop)}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Costo año actual</dt>
+                <dd className="text-base font-semibold">{formatCurrency(summary.totalCostCop)}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Utilidad año actual</dt>
+                <dd className={`text-base font-semibold ${metricValueClassName(summary.totalUtilityCop)}`}>
+                  {formatCurrency(summary.totalUtilityCop)}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Margen de utilidad</dt>
+                <dd className={`text-base font-semibold ${metricValueClassName(summary.totalUtilityCop)}`}>
+                  {formatPercent(summary.utilityMargin)}
+                </dd>
+              </div>
+              {hasTotalPendingRecovery ? (
+                <div className="min-w-0 border-t border-amber-200 pt-3 sm:col-span-2 lg:col-span-4">
+                  <dt className="text-xs text-muted-foreground">Pendiente total por recuperar</dt>
+                  <dd className="text-base font-semibold text-amber-700">
+                    {formatCurrency(summary.totalPendingRecoveryCop)}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+        </div>
+
+        <dl className="grid gap-4 border-t pt-4 text-sm md:grid-cols-[1.4fr_1fr_1fr]">
+          <div className="flex min-w-0 items-start gap-3">
+            <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             <div className="min-w-0">
               <dt className="text-xs text-muted-foreground">Ubicación</dt>
               <dd className="truncate font-medium">
-                {departamento?.name || valuationCase.departamento_id} / {municipio?.name || valuationCase.municipio_id}
+                {departamento?.name || "Sin departamento"} / {municipio?.name || "Sin municipio"}
                 {valuationCase.vereda ? ` - ${valuationCase.vereda}` : ""}
               </dd>
             </div>
           </div>
-          <div className="flex min-h-16 items-center px-4 py-3">
-            <div className="min-w-0">
-              <dt className="text-xs text-muted-foreground">Cultivos/Lotes</dt>
-              <dd className="font-medium">{blocks.length}</dd>
-              {firstCropLabel(blocks, cropsById, varietiesById) ? (
-                <dd className="truncate text-slate-500">{firstCropLabel(blocks, cropsById, varietiesById)}</dd>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex min-h-16 items-center gap-3 px-4 py-3">
-            <Calendar className="h-4 w-4 shrink-0 text-slate-400" />
+          <div className="flex min-w-0 items-start gap-3">
+            <Calendar className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             <div className="min-w-0">
               <dt className="text-xs text-muted-foreground">Fecha</dt>
               <dd className="font-medium">{formatDate(valuationCase.valuation_asof_date)}</dd>
             </div>
           </div>
-          <div className="flex min-h-16 items-center px-4 py-3">
-            <div className="min-w-0">
-              <dt className="text-xs text-muted-foreground">Avalúo final</dt>
-              <dd className="font-semibold text-emerald-700">{formatCurrency(totalAppraisedValue)}</dd>
-              <dd className="text-slate-500">{formatPercent(valuationCase.discount_rate_ea)} EA</dd>
-            </div>
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">Tasa de descuento</dt>
+            <dd className="font-medium">{formatPercent(valuationCase.discount_rate_ea)} EA</dd>
+            {cropLabel ? <dd className="truncate text-slate-500">{cropLabel}</dd> : null}
           </div>
         </dl>
       </CardContent>
@@ -284,7 +482,25 @@ function ValuationSummaryBand({
   )
 }
 
-function AppraisalMetrics({ appraisal }: Readonly<{ appraisal: AppraisalResult }>) {
+function AppraisalMetrics({
+  annualFlows,
+  appraisal,
+  profile,
+}: Readonly<{ annualFlows: AnnualFlow[]; appraisal: AppraisalResult; profile: AgronomicProfile | undefined }>) {
+  const isSalvage = appraisal.stage_id === "salvamento"
+  const hasBlockPendingRecovery = !isSalvage && hasPendingRecovery(appraisal.pending_recovery_cop_ha)
+  const blockBreakEvenAge = hasBlockPendingRecovery ? displayBreakEvenAge(appraisal, annualFlows, profile) : null
+  const contextMetrics = [
+    isSalvage
+      ? { label: "Etapa", value: "Salvamento" }
+      : hasBlockPendingRecovery
+      ? { label: "Pendiente por recuperar", value: formatCurrency(appraisal.pending_recovery_cop_ha) }
+      : { label: "Situación financiera", value: "Inversión recuperada" },
+    hasBlockPendingRecovery && blockBreakEvenAge !== null
+      ? { label: "Año equilibrio", value: formatEquilibriumYear(blockBreakEvenAge) }
+      : { label: "Base del avalúo", value: appraisalBasisLabel(appraisal.appraisal_rule) },
+  ]
+
   return (
     <>
       <div className="grid gap-4 md:grid-cols-4">
@@ -305,7 +521,7 @@ function AppraisalMetrics({ appraisal }: Readonly<{ appraisal: AppraisalResult }
           <div className="text-lg font-semibold">{formatNumber(appraisal.crop_area_ha)} ha</div>
         </div>
       </div>
-      <div className="grid gap-4 text-sm md:grid-cols-5">
+      <div className="grid gap-4 text-sm md:grid-cols-3 xl:grid-cols-6">
         <div>
           <span className="font-medium">Rendimiento del año:</span> {formatNumber(appraisal.current_year_yield_kg_ha)}{" "}
           kg/ha
@@ -319,10 +535,11 @@ function AppraisalMetrics({ appraisal }: Readonly<{ appraisal: AppraisalResult }
         <div>
           <span className="font-medium">Utilidad del año:</span> {formatCurrency(appraisal.current_year_utility_cop_ha)}
         </div>
-        <div>
-          <span className="font-medium">Pendiente por recuperar:</span>{" "}
-          {formatCurrency(appraisal.pending_recovery_cop_ha)}
-        </div>
+        {contextMetrics.map((metric) => (
+          <div key={metric.label}>
+            <span className="font-medium">{metric.label}:</span> {metric.value}
+          </div>
+        ))}
       </div>
     </>
   )
@@ -371,13 +588,17 @@ function CropBlockResultCard({
   appraisal,
   block,
   crop,
+  flows,
   lines,
+  profile,
   variety,
 }: Readonly<{
   appraisal: AppraisalResult | undefined
   block: CropBlock
   crop: Crop | undefined
+  flows: AnnualFlow[]
   lines: ResolvedLine[]
+  profile: AgronomicProfile | undefined
   variety: Variety | undefined
 }>) {
   return (
@@ -387,16 +608,18 @@ function CropBlockResultCard({
           <div>
             <CardTitle>{block.block_label}</CardTitle>
             <CardDescription>
-              {crop?.name || block.crop_id} {variety?.name || block.variety_id}
+              {crop?.name || "Sin cultivo"} {variety?.name || ""}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge variant="secondary">Etapa: {formatStageLabel(block.derived_stage_id)}</Badge>
+            <Badge variant="outline" className={productionStageBadgeClassName(block.derived_stage_id)}>
+              Etapa: {formatStageLabel(block.derived_stage_id)}
+            </Badge>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
-        {appraisal ? <AppraisalMetrics appraisal={appraisal} /> : null}
+        {appraisal ? <AppraisalMetrics annualFlows={flows} appraisal={appraisal} profile={profile} /> : null}
         <ResolvedLinesTable lines={lines} />
       </CardContent>
     </Card>
@@ -461,10 +684,7 @@ export function ValuationViewClient() {
     }
   }, [params.id, supabase])
 
-  const totalAppraisedValue = Object.values(state.appraisalsByBlock).reduce(
-    (sum, appraisal) => sum + toNumber(appraisal.appraised_value_cop),
-    0,
-  )
+  const summary = buildValuationSummary(state.blocks, state.appraisalsByBlock)
 
   return (
     <div className="min-h-screen bg-background">
@@ -484,7 +704,7 @@ export function ValuationViewClient() {
                 cropsById={state.cropsById}
                 departamento={state.departamento}
                 municipio={state.municipio}
-                totalAppraisedValue={totalAppraisedValue}
+                summary={summary}
                 valuationCase={state.valuationCase}
                 varietiesById={state.varietiesById}
               />
@@ -497,7 +717,9 @@ export function ValuationViewClient() {
                   appraisal={state.appraisalsByBlock[block.id]}
                   block={block}
                   crop={state.cropsById.get(block.crop_id)}
+                  flows={state.flowsByBlock[block.id] || []}
                   lines={state.linesByBlock[block.id] || []}
+                  profile={state.profilesByCropVariety.get(cropVarietyKey(block.crop_id, block.variety_id))}
                   variety={state.varietiesById.get(block.variety_id)}
                 />
               ))}

@@ -35,6 +35,36 @@ export type Database = {
         }
         Relationships: []
       }
+      department_jornal_costs: {
+        Row: {
+          departamento_id: string
+          jornal_with_food_cop: Numeric | null
+          jornal_without_food_cop: Numeric
+          source_sheet: string
+          source_row: number
+          source_row_data: Json | null
+          active: boolean | null
+        }
+        Insert: {
+          departamento_id: string
+          jornal_with_food_cop?: Numeric | number | null
+          jornal_without_food_cop: Numeric | number
+          source_sheet?: string
+          source_row: number
+          source_row_data?: Json | null
+          active?: boolean | null
+        }
+        Update: {
+          departamento_id?: string
+          jornal_with_food_cop?: Numeric | number | null
+          jornal_without_food_cop?: Numeric | number
+          source_sheet?: string
+          source_row?: number
+          source_row_data?: Json | null
+          active?: boolean | null
+        }
+        Relationships: []
+      }
       municipios: {
         Row: {
           id: string
@@ -166,7 +196,6 @@ export type Database = {
           id: string
           crop_id: string
           variety_id: string
-          crop_variety_name: string
           lifecycle_months: Numeric | null
           lifecycle_years: Numeric | null
           harvest_start_month: Numeric | null
@@ -183,7 +212,6 @@ export type Database = {
           id?: string
           crop_id: string
           variety_id: string
-          crop_variety_name: string
           lifecycle_months?: Numeric | number | null
           lifecycle_years?: Numeric | number | null
           harvest_start_month?: Numeric | number | null
@@ -200,7 +228,6 @@ export type Database = {
           id?: string
           crop_id?: string
           variety_id?: string
-          crop_variety_name?: string
           lifecycle_months?: Numeric | number | null
           lifecycle_years?: Numeric | number | null
           harvest_start_month?: Numeric | number | null
@@ -357,7 +384,6 @@ export type Database = {
         Row: {
           id: string
           departamento_id: string | null
-          departamento_name_source: string
           input_group_name: string | null
           input_name: string
           normalized_input_name: string
@@ -375,7 +401,6 @@ export type Database = {
         Insert: {
           id?: string
           departamento_id?: string | null
-          departamento_name_source: string
           input_group_name?: string | null
           input_name: string
           normalized_input_name: string
@@ -393,7 +418,6 @@ export type Database = {
         Update: {
           id?: string
           departamento_id?: string | null
-          departamento_name_source?: string
           input_group_name?: string | null
           input_name?: string
           normalized_input_name?: string
@@ -738,7 +762,7 @@ export type Database = {
         Row: {
           id: string
           crop_block_id: string
-          appraisal_rule: "vegetative" | "pre_equilibrium" | "post_equilibrium"
+          appraisal_rule: "vegetative" | "pre_equilibrium" | "post_equilibrium" | "salvamento"
           stage_id: "establecimiento" | "improductivo" | "mantenimiento" | "salvamento"
           discount_rate_method: string
           discount_rate_ea: Numeric
@@ -766,7 +790,7 @@ export type Database = {
         Insert: {
           id?: string
           crop_block_id: string
-          appraisal_rule: "vegetative" | "pre_equilibrium" | "post_equilibrium"
+          appraisal_rule: "vegetative" | "pre_equilibrium" | "post_equilibrium" | "salvamento"
           stage_id: "establecimiento" | "improductivo" | "mantenimiento" | "salvamento"
           discount_rate_method: string
           discount_rate_ea: Numeric | number
@@ -794,7 +818,7 @@ export type Database = {
         Update: {
           id?: string
           crop_block_id?: string
-          appraisal_rule?: "vegetative" | "pre_equilibrium" | "post_equilibrium"
+          appraisal_rule?: "vegetative" | "pre_equilibrium" | "post_equilibrium" | "salvamento"
           stage_id?: "establecimiento" | "improductivo" | "mantenimiento" | "salvamento"
           discount_rate_method?: string
           discount_rate_ea?: Numeric | number

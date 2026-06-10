@@ -77,6 +77,7 @@ sql_paths = [
   "./seeds/006_municipio_crop_availability.sql",
   "./seeds/007_cost_template_lines.sql",
   "./seeds/008_input_price_rows.sql",
+  "./seeds/009_department_jornal_costs.sql",
 ]
 
 [db.network_restrictions]
@@ -395,7 +396,7 @@ deno_version = 2
 # secret_key = "env(SECRET_VALUE)"
 
 [analytics]
-enabled = true
+enabled = false
 port = 54327
 # Configure one of the supported backends: `postgres`, `bigquery`.
 backend = "postgres"

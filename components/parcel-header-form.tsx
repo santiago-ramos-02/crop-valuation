@@ -12,43 +12,23 @@ import { NumericInput } from "@/components/ui/numeric-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
+import {
+  createDefaultParcelHeaderData,
+  defaultDiscountRateEa,
+  type ParcelHeaderData,
+} from "@/lib/valuation/form-data"
 import type { Database } from "@/types/database"
 
 type Departamento = Database["public"]["Tables"]["departamentos"]["Row"]
 type Municipio = Database["public"]["Tables"]["municipios"]["Row"]
 type LookupOption = Database["public"]["Tables"]["lookup_options"]["Row"]
 
-export interface ParcelHeaderData {
-  valuationAsOfDate: string
-  parcelId: string
-  departamentoId: string
-  municipioId: string
-  vereda: string
-  latitude: string
-  longitude: string
-  climateType: string
-  temperatureRange: string
-  altitudeRange: string
-  aptitudeUpraSipra: string
-  slopePercent: string
-  agrologicClass: string
-  altitudeM: string
-  totalParcelAreaHa: string
-  discountRateMethod: string
-  discountRateEa: string
-}
-
 interface ParcelHeaderFormProps {
   onSubmit: (data: ParcelHeaderData) => void
-  onChange?: (data: ParcelHeaderData) => void
-  initialData?: Partial<ParcelHeaderData>
+  onChange: (data: ParcelHeaderData) => void
+  value: ParcelHeaderData
   isLoading?: boolean
 }
-
-const today = () => new Date().toISOString().slice(0, 10)
-const defaultParcelId = () => `VAL-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`
-const defaultDiscountRateMethod = "Finagro"
-const defaultDiscountRateEa = "0.08462342102763798"
 
 function optionGroups(options: LookupOption[]) {
   return options.reduce<Record<string, LookupOption[]>>((groups, option) => {
@@ -65,6 +45,18 @@ function metadataText(option: LookupOption | undefined, key: string) {
   return typeof value === "string" || typeof value === "number" ? String(value) : ""
 }
 
+const roundedPercentFormatter = new Intl.NumberFormat("es-CO", {
+  style: "percent",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+function formatRoundedDiscountRate(value: string) {
+  const parsed = parseLocalizedNumberInput(value)
+  if (parsed === null) return ""
+  return roundedPercentFormatter.format(parsed)
+}
+
 function SelectField({
   id,
   value,
@@ -72,6 +64,7 @@ function SelectField({
   options,
   placeholder,
   className,
+  describedBy,
   disabled,
   required,
   invalid,
@@ -82,6 +75,7 @@ function SelectField({
   options: Array<{ value: string; label: string }>
   placeholder: string
   className?: string
+  describedBy?: string
   disabled?: boolean
   required?: boolean
   invalid?: boolean
@@ -92,6 +86,7 @@ function SelectField({
         id={id}
         aria-required={required || undefined}
         aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
         className={`w-full ${className || ""}`}
       >
         <SelectValue placeholder={placeholder} />
@@ -107,38 +102,17 @@ function SelectField({
   )
 }
 
-export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = false }: Readonly<ParcelHeaderFormProps>) {
+export function ParcelHeaderForm({ onSubmit, onChange, value: formData, isLoading = false }: Readonly<ParcelHeaderFormProps>) {
   const supabase = useMemo(() => createClient(), [])
   const [departamentos, setDepartamentos] = useState<Departamento[]>([])
   const [municipios, setMunicipios] = useState<Municipio[]>([])
   const [lookupOptions, setLookupOptions] = useState<LookupOption[]>([])
   const [errors, setErrors] = useState<Partial<Record<keyof ParcelHeaderData, string>>>({})
 
-  const [formData, setFormData] = useState<ParcelHeaderData>({
-    valuationAsOfDate: initialData?.valuationAsOfDate || today(),
-    parcelId: initialData?.parcelId || defaultParcelId(),
-    departamentoId: initialData?.departamentoId || "",
-    municipioId: initialData?.municipioId || "",
-    vereda: initialData?.vereda || "",
-    latitude: initialData?.latitude || "",
-    longitude: initialData?.longitude || "",
-    climateType: initialData?.climateType || "",
-    temperatureRange: initialData?.temperatureRange || "",
-    altitudeRange: initialData?.altitudeRange || "",
-    aptitudeUpraSipra: initialData?.aptitudeUpraSipra || "",
-    slopePercent: initialData?.slopePercent || "",
-    agrologicClass: initialData?.agrologicClass || "",
-    altitudeM: initialData?.altitudeM || "",
-    totalParcelAreaHa: initialData?.totalParcelAreaHa || "",
-    discountRateMethod: initialData?.discountRateMethod || defaultDiscountRateMethod,
-    discountRateEa: initialData?.discountRateEa || defaultDiscountRateEa,
-  })
-
   useEffect(() => {
     async function loadCatalogs() {
-      const [departamentosRes, municipiosRes, lookupRes] = await Promise.all([
+      const [departamentosRes, lookupRes] = await Promise.all([
         supabase.from("departamentos").select("*").order("name").returns<Departamento[]>(),
-        supabase.from("municipios").select("*").order("name").returns<Municipio[]>(),
         supabase
           .from("lookup_options")
           .select("*")
@@ -149,7 +123,6 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
       ])
 
       setDepartamentos((departamentosRes.data || []).filter((departamento) => departamento.active !== false))
-      setMunicipios((municipiosRes.data || []).filter((municipio) => municipio.active !== false))
       setLookupOptions(lookupRes.data || [])
     }
 
@@ -157,8 +130,24 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
   }, [supabase])
 
   useEffect(() => {
-    onChange?.(formData)
-  }, [formData, onChange])
+    async function loadMunicipios() {
+      if (!formData.departamentoId) {
+        setMunicipios([])
+        return
+      }
+
+      const { data } = await supabase
+        .from("municipios")
+        .select("*")
+        .eq("departamento_id", formData.departamentoId)
+        .order("name")
+        .returns<Municipio[]>()
+
+      setMunicipios((data || []).filter((municipio) => municipio.active !== false))
+    }
+
+    loadMunicipios()
+  }, [formData.departamentoId, supabase])
 
   const filteredMunicipios = useMemo(
     () => municipios.filter((municipio) => municipio.departamento_id === formData.departamentoId),
@@ -166,32 +155,31 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
   )
 
   const optionsByGroup = useMemo(() => optionGroups(lookupOptions), [lookupOptions])
+  const discountRateDescription = formatRoundedDiscountRate(formData.discountRateEa)
 
   const handleInputChange = (field: keyof ParcelHeaderData, value: string) => {
-    setFormData((current) => {
-      const next = { ...current, [field]: value }
-      if (field === "departamentoId") {
-        next.municipioId = ""
-        next.vereda = ""
-        next.latitude = ""
-        next.longitude = ""
-      }
-      if (field === "municipioId") {
-        const selectedMunicipio = municipios.find((municipio) => municipio.id === value)
-        next.latitude = selectedMunicipio?.latitude ? String(selectedMunicipio.latitude) : ""
-        next.longitude = selectedMunicipio?.longitude ? String(selectedMunicipio.longitude) : ""
-      }
-      if (field === "climateType") {
-        const selectedClimate = lookupOptions.find((option) => option.group_key === "climate_type" && option.value === value)
-        next.temperatureRange = metadataText(selectedClimate, "temperature_range")
-        next.altitudeRange = metadataText(selectedClimate, "altitude_range")
-      }
-      if (field === "discountRateMethod") {
-        const selectedRate = lookupOptions.find((option) => option.group_key === "discount_rate_method" && option.value === value)
-        next.discountRateEa = metadataText(selectedRate, "rate_ea") || next.discountRateEa
-      }
-      return next
-    })
+    const next = { ...formData, [field]: value }
+    if (field === "departamentoId") {
+      next.municipioId = ""
+      next.vereda = ""
+      next.latitude = ""
+      next.longitude = ""
+    }
+    if (field === "municipioId") {
+      const selectedMunicipio = municipios.find((municipio) => municipio.id === value)
+      next.latitude = selectedMunicipio?.latitude ? String(selectedMunicipio.latitude) : ""
+      next.longitude = selectedMunicipio?.longitude ? String(selectedMunicipio.longitude) : ""
+    }
+    if (field === "climateType") {
+      const selectedClimate = lookupOptions.find((option) => option.group_key === "climate_type" && option.value === value)
+      next.temperatureRange = metadataText(selectedClimate, "temperature_range")
+      next.altitudeRange = metadataText(selectedClimate, "altitude_range")
+    }
+    if (field === "discountRateMethod") {
+      const selectedRate = lookupOptions.find((option) => option.group_key === "discount_rate_method" && option.value === value)
+      next.discountRateEa = metadataText(selectedRate, "rate_ea") || defaultDiscountRateEa
+    }
+    onChange(next)
 
     if (errors[field]) {
       setErrors((current) => ({ ...current, [field]: undefined }))
@@ -211,12 +199,6 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
       if (area === null || area <= 0) nextErrors.totalParcelAreaHa = "El área debe ser un número positivo"
     }
     if (!formData.discountRateMethod) nextErrors.discountRateMethod = "El método de tasa es requerido"
-    if (!formData.discountRateEa.trim()) {
-      nextErrors.discountRateEa = "La tasa de descuento es requerida"
-    } else {
-      const rate = parseLocalizedNumberInput(formData.discountRateEa)
-      if (rate === null || rate < 0) nextErrors.discountRateEa = "La tasa debe ser un número mayor o igual a cero"
-    }
 
     setErrors(nextErrors)
     return Object.keys(nextErrors).length === 0
@@ -224,29 +206,11 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
-    if (validateForm()) onSubmit(formData)
+    if (validateForm()) onSubmit({ ...formData, discountRateEa: formData.discountRateEa.trim() || defaultDiscountRateEa })
   }
 
   const handleClear = () => {
-    setFormData({
-      valuationAsOfDate: today(),
-      parcelId: defaultParcelId(),
-      departamentoId: "",
-      municipioId: "",
-      vereda: "",
-      latitude: "",
-      longitude: "",
-      climateType: "",
-      temperatureRange: "",
-      altitudeRange: "",
-      aptitudeUpraSipra: "",
-      slopePercent: "",
-      agrologicClass: "",
-      altitudeM: "",
-      totalParcelAreaHa: "",
-      discountRateMethod: defaultDiscountRateMethod,
-      discountRateEa: defaultDiscountRateEa,
-    })
+    onChange(createDefaultParcelHeaderData())
     setErrors({})
   }
 
@@ -334,7 +298,7 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
                 <Label htmlFor="slope">Pendiente del Predio (%)</Label>
                 <NumericInput
                   id="slope"
-                  placeholder="7"
+                  placeholder="10"
                   value={formData.slopePercent}
                   onValueChange={(value) => handleInputChange("slopePercent", value)}
                 />
@@ -355,7 +319,7 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
                 <Label htmlFor="altitudeM">Altitud (msnm)</Label>
                 <NumericInput
                   id="altitudeM"
-                  placeholder="1.200"
+                  placeholder="1.000"
                   value={formData.altitudeM}
                   onValueChange={(value) => handleInputChange("altitudeM", value)}
                 />
@@ -368,6 +332,7 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
                   value={formData.discountRateMethod}
                   onChange={(value) => handleInputChange("discountRateMethod", value)}
                   className={errors.discountRateMethod ? "border-destructive" : ""}
+                  describedBy={discountRateDescription ? "discountRateDescription" : undefined}
                   required
                   invalid={Boolean(errors.discountRateMethod)}
                   placeholder="Seleccione método"
@@ -376,25 +341,12 @@ export function ParcelHeaderForm({ onSubmit, onChange, initialData, isLoading = 
                     label: option.label,
                   }))}
                 />
+                {discountRateDescription ? (
+                  <p id="discountRateDescription" className="text-sm text-muted-foreground">
+                    Tasa aplicada: {discountRateDescription} E.A.
+                  </p>
+                ) : null}
                 {errors.discountRateMethod ? <p className="text-sm text-destructive">{errors.discountRateMethod}</p> : null}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="discountRateEa">Tasa de descuento (EA, decimal) *</Label>
-                <NumericInput
-                  id="discountRateEa"
-                  placeholder="0,08462342"
-                  required
-                  aria-invalid={Boolean(errors.discountRateEa)}
-                  value={formData.discountRateEa}
-                  onValueChange={(value) => handleInputChange("discountRateEa", value)}
-                  className={errors.discountRateEa ? "border-destructive" : ""}
-                />
-                {errors.discountRateEa ? (
-                  <p className="text-sm text-destructive">{errors.discountRateEa}</p>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Ej.: 0.0846 equivale a 8,46 % EA.</p>
-                )}
               </div>
             </div>
           </div>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Calendar, Edit, Eye, LayoutDashboard, MapPin, Search, Trash2 } from "lucide-react"
 
 import { Header } from "@/components/header"
@@ -43,6 +43,10 @@ const currencyFormatter = new Intl.NumberFormat("es-CO", {
   maximumFractionDigits: 0,
 })
 
+const numberFormatter = new Intl.NumberFormat("es-CO", {
+  maximumFractionDigits: 2,
+})
+
 interface ValuationSummary {
   id: string
   caseCode: string
@@ -69,8 +73,29 @@ function formatCurrency(amount: number) {
   return currencyFormatter.format(amount)
 }
 
+function formatNumber(amount: number) {
+  return numberFormatter.format(amount)
+}
+
 function startNewValuation() {
   window.location.href = `/valuation/new?fresh=${Date.now()}`
+}
+
+function valuationCaseTimestamp(valuationCase: ValuationCase) {
+  return new Date(valuationCase.updated_at || valuationCase.created_at || valuationCase.valuation_asof_date).getTime()
+}
+
+function latestCasesByCode(cases: ValuationCase[]) {
+  const byCode = new Map<string, ValuationCase>()
+
+  for (const valuationCase of cases) {
+    const current = byCode.get(valuationCase.case_code)
+    if (!current || valuationCaseTimestamp(valuationCase) > valuationCaseTimestamp(current)) {
+      byCode.set(valuationCase.case_code, valuationCase)
+    }
+  }
+
+  return Array.from(byCode.values())
 }
 
 export default function DashboardPage() {
@@ -81,28 +106,20 @@ export default function DashboardPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [isLoading, setIsLoading] = useState(true)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [valuationToDelete, setValuationToDelete] = useState<string | null>(null)
+  const valuationToDeleteRef = useRef<string | null>(null)
 
   const loadValuations = useCallback(async () => {
     setIsLoading(true)
     try {
-      const [
-        casesRes,
-        departamentosRes,
-        municipiosRes,
-        cropsRes,
-        varietiesRes,
-      ] = await Promise.all([
-        supabase.from("valuation_cases").select("*").order("created_at", { ascending: false }).returns<ValuationCase[]>(),
-        supabase.from("departamentos").select("*").returns<Departamento[]>(),
-        supabase.from("municipios").select("*").returns<Municipio[]>(),
-        supabase.from("crops").select("*").returns<Crop[]>(),
-        supabase.from("varieties").select("*").returns<Variety[]>(),
-      ])
+      const casesRes = await supabase
+        .from("valuation_cases")
+        .select("*")
+        .order("updated_at", { ascending: false })
+        .returns<ValuationCase[]>()
 
       if (casesRes.error) throw casesRes.error
 
-      const cases = casesRes.data || []
+      const cases = latestCasesByCode(casesRes.data || [])
       const caseIds = cases.map((valuationCase) => valuationCase.id)
       const blocksRes = caseIds.length
         ? await supabase.from("crop_blocks").select("*").in("valuation_case_id", caseIds).returns<CropBlock[]>()
@@ -110,10 +127,33 @@ export default function DashboardPage() {
       if (blocksRes.error) throw blocksRes.error
 
       const blockIds = (blocksRes.data || []).map((block) => block.id)
-      const appraisalsRes = blockIds.length
-        ? await supabase.from("crop_appraisal_results").select("*").in("crop_block_id", blockIds).returns<AppraisalResult[]>()
-        : { data: [] as AppraisalResult[], error: null }
+      const departamentoIds = Array.from(new Set(cases.map((valuationCase) => valuationCase.departamento_id)))
+      const municipioIds = Array.from(new Set(cases.map((valuationCase) => valuationCase.municipio_id)))
+      const cropIds = Array.from(new Set((blocksRes.data || []).map((block) => block.crop_id)))
+      const varietyIds = Array.from(new Set((blocksRes.data || []).map((block) => block.variety_id)))
+
+      const [appraisalsRes, departamentosRes, municipiosRes, cropsRes, varietiesRes] = await Promise.all([
+        blockIds.length
+          ? supabase.from("crop_appraisal_results").select("*").in("crop_block_id", blockIds).returns<AppraisalResult[]>()
+          : Promise.resolve({ data: [] as AppraisalResult[], error: null }),
+        departamentoIds.length
+          ? supabase.from("departamentos").select("*").in("id", departamentoIds).returns<Departamento[]>()
+          : Promise.resolve({ data: [] as Departamento[], error: null }),
+        municipioIds.length
+          ? supabase.from("municipios").select("*").in("id", municipioIds).returns<Municipio[]>()
+          : Promise.resolve({ data: [] as Municipio[], error: null }),
+        cropIds.length
+          ? supabase.from("crops").select("*").in("id", cropIds).returns<Crop[]>()
+          : Promise.resolve({ data: [] as Crop[], error: null }),
+        varietyIds.length
+          ? supabase.from("varieties").select("*").in("id", varietyIds).returns<Variety[]>()
+          : Promise.resolve({ data: [] as Variety[], error: null }),
+      ])
       if (appraisalsRes.error) throw appraisalsRes.error
+      if (departamentosRes.error) throw departamentosRes.error
+      if (municipiosRes.error) throw municipiosRes.error
+      if (cropsRes.error) throw cropsRes.error
+      if (varietiesRes.error) throw varietiesRes.error
 
       const departamentos = new Map((departamentosRes.data || []).map((row) => [row.id, row.name]))
       const municipios = new Map((municipiosRes.data || []).map((row) => [row.id, row.name]))
@@ -137,11 +177,11 @@ export default function DashboardPage() {
           return {
             id: valuationCase.id,
             caseCode: valuationCase.case_code,
-            location: `${departamentos.get(valuationCase.departamento_id) || valuationCase.departamento_id} / ${
-              municipios.get(valuationCase.municipio_id) || valuationCase.municipio_id
+            location: `${departamentos.get(valuationCase.departamento_id) || "Sin departamento"} / ${
+              municipios.get(valuationCase.municipio_id) || "Sin municipio"
             }`,
-            crop: firstBlock ? crops.get(firstBlock.crop_id) || firstBlock.crop_id : "Sin cultivo",
-            variety: firstBlock ? varieties.get(firstBlock.variety_id) || firstBlock.variety_id : "",
+            crop: firstBlock ? crops.get(firstBlock.crop_id) || "Sin cultivo" : "Sin cultivo",
+            variety: firstBlock ? varieties.get(firstBlock.variety_id) || "" : "",
             totalAreaHa: toNumber(valuationCase.total_parcel_area_ha) || blockAreaHa,
             blockCount: caseBlocks.length,
             totalAppraisedCop: blockAppraisals.reduce((sum, appraisal) => sum + toNumber(appraisal.appraised_value_cop), 0),
@@ -176,6 +216,10 @@ export default function DashboardPage() {
   const totalArea = valuations.reduce((sum, valuation) => sum + valuation.totalAreaHa, 0)
   const totalBlocks = valuations.reduce((sum, valuation) => sum + valuation.blockCount, 0)
   const totalAppraisedCop = valuations.reduce((sum, valuation) => sum + valuation.totalAppraisedCop, 0)
+  const averageAppraisedCop = totalCases > 0 ? totalAppraisedCop / totalCases : 0
+  const averageValueCopHa = totalArea > 0 ? totalAppraisedCop / totalArea : 0
+  const averageAreaHa = totalCases > 0 ? totalArea / totalCases : 0
+  const averageBlocks = totalCases > 0 ? totalBlocks / totalCases : 0
 
   async function handleDelete(id: string) {
     try {
@@ -194,10 +238,11 @@ export default function DashboardPage() {
   }
 
   function confirmDelete() {
+    const valuationToDelete = valuationToDeleteRef.current
     if (valuationToDelete) {
       handleDelete(valuationToDelete)
       setDeleteDialogOpen(false)
-      setValuationToDelete(null)
+      valuationToDeleteRef.current = null
     }
   }
 
@@ -225,38 +270,38 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Total de Valuaciones</CardTitle>
+                <CardTitle className="text-sm font-medium">Avalúo promedio</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{totalCases}</div>
-                <div className="text-xs text-muted-foreground mt-1">Propiedades evaluadas</div>
+                <div className="text-2xl font-bold text-emerald-700">{formatCurrency(averageAppraisedCop)}</div>
+                <div className="text-xs text-muted-foreground mt-1">Promedio por valuación</div>
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Área registrada</CardTitle>
+                <CardTitle className="text-sm font-medium">Valor por hectárea</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{totalArea.toLocaleString("es-CO")} ha</div>
-                <div className="text-xs text-muted-foreground mt-1">Hectáreas bajo evaluación</div>
+                <div className="text-2xl font-bold">{formatCurrency(averageValueCopHa)}</div>
+                <div className="text-xs text-muted-foreground mt-1">Referencia ponderada por área</div>
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Cultivos/Lotes</CardTitle>
+                <CardTitle className="text-sm font-medium">Área promedio</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{totalBlocks}</div>
-                <div className="text-xs text-muted-foreground mt-1">Unidades registradas</div>
+                <div className="text-2xl font-bold">{formatNumber(averageAreaHa)} ha</div>
+                <div className="text-xs text-muted-foreground mt-1">Hectáreas por valuación</div>
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Avalúo final</CardTitle>
+                <CardTitle className="text-sm font-medium">Lotes por valuación</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">{formatCurrency(totalAppraisedCop)}</div>
-                <div className="text-xs text-muted-foreground mt-1">Valor consolidado</div>
+                <div className="text-2xl font-bold">{formatNumber(averageBlocks)}</div>
+                <div className="text-xs text-muted-foreground mt-1">Promedio de cultivos/lotes</div>
               </CardContent>
             </Card>
           </div>
@@ -337,7 +382,7 @@ export default function DashboardPage() {
                               size="sm"
                               className="text-red-600 hover:text-red-700"
                               onClick={() => {
-                                setValuationToDelete(valuation.id)
+                                valuationToDeleteRef.current = valuation.id
                                 setDeleteDialogOpen(true)
                               }}
                             >
@@ -355,7 +400,13 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <AlertDialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open)
+          if (!open) valuationToDeleteRef.current = null
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Eliminar valuación</AlertDialogTitle>

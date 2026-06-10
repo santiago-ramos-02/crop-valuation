@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
+import { createEmptyBlock, type BlockData } from "@/lib/valuation/form-data"
 import type { Database } from "@/types/database"
 
 type Crop = Database["public"]["Tables"]["crops"]["Row"]
@@ -21,35 +22,10 @@ type LookupOption = Database["public"]["Tables"]["lookup_options"]["Row"]
 type AgronomicProfile = Database["public"]["Tables"]["crop_variety_agronomic_profiles"]["Row"]
 type MunicipioCropAvailability = Database["public"]["Tables"]["municipio_crop_availability"]["Row"]
 
-export interface BlockData {
-  blockLabel: string
-  cropId: string
-  varietyId: string
-  cropType: string
-  productionSystem: string
-  ageYears: string
-  fitosanitaryCondition: string
-  fitosanitaryFactor: string
-  plantDistanceM: string
-  rowDistanceM: string
-  plantingDensityPlantsHa: string
-  cropAreaHa: string
-  freshYieldKgHa: string
-  waterAvailability: string
-  rainfallRegime: string
-  annualPrecipitationMm: string
-  plantingFrame: string
-  landRentCopHaYear: string
-  jornalCostCop: string
-  soilValueCopHa: string
-  commercialPriceCopKg: string
-  notes: string
-}
-
 interface BlockEntryFormProps {
+  blocks: BlockData[]
   onSubmit: (blocks: BlockData[]) => void
-  onChange?: (blocks: BlockData[]) => void
-  initialBlocks?: BlockData[]
+  onChange: (blocks: BlockData[]) => void
   isLoading?: boolean
   municipioId?: string
   totalParcelAreaHa?: number
@@ -59,31 +35,6 @@ interface BlockEntryFormProps {
 type BlockErrors = Partial<Record<keyof BlockData, string>>
 
 const numberFormatter = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 4 })
-
-const createEmptyBlock = (index = 0): BlockData => ({
-  blockLabel: `Lote ${index + 1}`,
-  cropId: "",
-  varietyId: "",
-  cropType: "",
-  productionSystem: "",
-  ageYears: "",
-  fitosanitaryCondition: "",
-  fitosanitaryFactor: "",
-  plantDistanceM: "",
-  rowDistanceM: "",
-  plantingDensityPlantsHa: "",
-  cropAreaHa: "",
-  freshYieldKgHa: "",
-  waterAvailability: "",
-  rainfallRegime: "",
-  annualPrecipitationMm: "",
-  plantingFrame: "",
-  landRentCopHaYear: "",
-  jornalCostCop: "",
-  soilValueCopHa: "",
-  commercialPriceCopKg: "",
-  notes: "",
-})
 
 function optionGroups(options: LookupOption[]) {
   return options.reduce<Record<string, LookupOption[]>>((groups, option) => {
@@ -188,16 +139,15 @@ function availabilityKey(cropId: string, varietyId: string) {
 }
 
 export function BlockEntryForm({
+  blocks,
   onSubmit,
   onChange,
-  initialBlocks,
   isLoading = false,
   municipioId = "",
   totalParcelAreaHa,
   submitLabel = "Guardar y presentar resultado",
 }: Readonly<BlockEntryFormProps>) {
   const supabase = useMemo(() => createClient(), [])
-  const [blocks, setBlocks] = useState<BlockData[]>(initialBlocks || [createEmptyBlock()])
   const [errors, setErrors] = useState<Record<number, BlockErrors>>({})
   const [crops, setCrops] = useState<Crop[]>([])
   const [varieties, setVarieties] = useState<Variety[]>([])
@@ -278,41 +228,6 @@ export function BlockEntryForm({
     }
   }, [municipioId, supabase])
 
-  useEffect(() => {
-    onChange?.(blocks)
-  }, [blocks, onChange])
-
-  useEffect(() => {
-    if (!municipioId || isAvailabilityLoading || availabilityError || availabilityLoadedFor !== municipioId) return
-
-    const availablePairs = new Set(
-      availabilityRows.map((row) => availabilityKey(row.crop_id, row.variety_id)),
-    )
-    const availableCropIds = new Set(availabilityRows.map((row) => row.crop_id))
-
-    setBlocks((current) => {
-      let changed = false
-      const next = current.map((block) => {
-        const selectedPairAvailable =
-          block.cropId && block.varietyId && availablePairs.has(availabilityKey(block.cropId, block.varietyId))
-        const selectedCropAvailable = block.cropId && !block.varietyId && availableCropIds.has(block.cropId)
-        if (!block.cropId || selectedPairAvailable || selectedCropAvailable) return block
-
-        changed = true
-        return {
-          ...block,
-          cropId: "",
-          varietyId: "",
-          rowDistanceM: "",
-          plantDistanceM: "",
-          plantingDensityPlantsHa: "",
-        }
-      })
-
-      return changed ? next : current
-    })
-  }, [availabilityError, availabilityLoadedFor, availabilityRows, isAvailabilityLoading, municipioId])
-
   const optionsByGroup = useMemo(() => optionGroups(lookupOptions), [lookupOptions])
   const currentAvailabilityRows = availabilityLoadedFor === municipioId ? availabilityRows : []
   const availableCropIds = new Set(currentAvailabilityRows.map((row) => row.crop_id))
@@ -344,33 +259,36 @@ export function BlockEntryForm({
   }
 
   const updateBlock = (index: number, field: keyof BlockData, value: string) => {
-    setBlocks((current) => {
-      const next = [...current]
-      let updated = { ...next[index], [field]: value }
+    const next = [...blocks]
+    let updated = { ...next[index], [field]: value }
 
-      if (field === "cropId") {
-        updated = {
-          ...updated,
-          varietyId: "",
-          rowDistanceM: "",
-          plantDistanceM: "",
-          plantingDensityPlantsHa: "",
-        }
+    if (field === "cropId") {
+      updated = {
+        ...updated,
+        varietyId: "",
+        rowDistanceM: "",
+        plantDistanceM: "",
+        plantingDensityPlantsHa: "",
       }
+    }
 
-      if (field === "varietyId") {
-        updated = applyProfileDefaults(updated)
-      }
+    if (field === "varietyId") {
+      updated = applyProfileDefaults(updated)
+    }
 
-      if (field === "fitosanitaryCondition") {
-        updated.fitosanitaryFactor = fitosanitaryFactorFor(value)
-      }
+    if (field === "fitosanitaryCondition") {
+      updated.fitosanitaryFactor = fitosanitaryFactorFor(value)
+    }
 
-      next[index] = updated
-      return next
-    })
+    next[index] = updated
+    onChange(next)
 
-    if (errors[index]?.[field] || field === "landRentCopHaYear" || field === "soilValueCopHa") {
+    if (
+      errors[index]?.[field] ||
+      field === "landRentCopHaYear" ||
+      field === "jornalCostCop" ||
+      field === "soilValueCopHa"
+    ) {
       setErrors((current) => {
         const next = { ...current }
         next[index] = { ...next[index], [field]: undefined }
@@ -383,12 +301,12 @@ export function BlockEntryForm({
   }
 
   const addBlock = () => {
-    setBlocks((current) => [...current, createEmptyBlock(current.length)])
+    onChange([...blocks, createEmptyBlock(blocks.length)])
   }
 
   const removeBlock = (index: number) => {
     if (blocks.length <= 1) return
-    setBlocks((current) => current.filter((_, currentIndex) => currentIndex !== index))
+    onChange(blocks.filter((_, currentIndex) => currentIndex !== index))
     setErrors((current) => {
       const next: Record<number, BlockErrors> = {}
       Object.entries(current).forEach(([key, value]) => {
@@ -409,6 +327,7 @@ export function BlockEntryForm({
       const cropAreaHa = block.cropAreaHa ? toNumber(block.cropAreaHa) : null
       const commercialPriceCopKg = block.commercialPriceCopKg ? toNumber(block.commercialPriceCopKg) : null
       const landRentCopHaYear = block.landRentCopHaYear.trim() ? toNumber(block.landRentCopHaYear) : null
+      const jornalCostCop = block.jornalCostCop.trim() ? toNumber(block.jornalCostCop) : null
       const soilValueCopHa = block.soilValueCopHa.trim() ? toNumber(block.soilValueCopHa) : null
 
       if (!block.blockLabel.trim()) blockErrors.blockLabel = "El nombre del cultivo/lote es requerido"
@@ -442,6 +361,9 @@ export function BlockEntryForm({
       }
       if (landRentCopHaYear !== null && landRentCopHaYear < 0) {
         blockErrors.landRentCopHaYear = "El costo de arriendo debe ser mayor o igual a cero"
+      }
+      if (jornalCostCop !== null && jornalCostCop < 0) {
+        blockErrors.jornalCostCop = "El costo del jornal debe ser mayor o igual a cero"
       }
       if (soilValueCopHa !== null && soilValueCopHa < 0) {
         blockErrors.soilValueCopHa = "El valor del suelo debe ser mayor o igual a cero"
@@ -480,9 +402,10 @@ export function BlockEntryForm({
 
       <form onSubmit={handleSubmit} className="space-y-6" noValidate>
         {blocks.map((block, index) => {
-          const availableVarietyIds = new Set(
-            currentAvailabilityRows.filter((row) => row.crop_id === block.cropId).map((row) => row.variety_id),
-          )
+          const availableVarietyIds = new Set<string>()
+          for (const row of currentAvailabilityRows) {
+            if (row.crop_id === block.cropId) availableVarietyIds.add(row.variety_id)
+          }
           const filteredVarieties = varieties.filter(
             (variety) => variety.crop_id === block.cropId && availableVarietyIds.has(variety.id),
           )
@@ -575,7 +498,7 @@ export function BlockEntryForm({
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor={`fitosanitary-${index}`}>Condición Fitosanitaria</Label>
+                        <Label htmlFor={`fitosanitary-${index}`}>Condición Fitosanitaria *</Label>
                         <SelectField
                           id={`fitosanitary-${index}`}
                           value={block.fitosanitaryCondition}
@@ -616,7 +539,7 @@ export function BlockEntryForm({
                           <Label htmlFor={`ageYears-${index}`}>Edad (años) *</Label>
                           <NumericInput
                             id={`ageYears-${index}`}
-                            placeholder="3"
+                            placeholder="1"
                             required
                             aria-invalid={Boolean(errors[index]?.ageYears)}
                             value={block.ageYears}
@@ -646,7 +569,7 @@ export function BlockEntryForm({
                           <Label htmlFor={`freshYield-${index}`}>Rendimiento en Fresco (kg/ha)</Label>
                           <NumericInput
                             id={`freshYield-${index}`}
-                            placeholder="12.000"
+                            placeholder="1.000"
                             value={block.freshYieldKgHa}
                             onValueChange={(value) => updateBlock(index, "freshYieldKgHa", value)}
                           />
@@ -716,7 +639,7 @@ export function BlockEntryForm({
                       <Label htmlFor={`precipitation-${index}`}>Precipitación Anual (mm/año)</Label>
                       <NumericInput
                         id={`precipitation-${index}`}
-                        placeholder="1.200"
+                        placeholder="1.000"
                         value={block.annualPrecipitationMm}
                         onValueChange={(value) => updateBlock(index, "annualPrecipitationMm", value)}
                       />
@@ -733,7 +656,7 @@ export function BlockEntryForm({
                       <Label htmlFor={`landRent-${index}`}>Costo de Arriendo (COP/ha/año)</Label>
                       <NumericInput
                         id={`landRent-${index}`}
-                        placeholder="500.000"
+                        placeholder="100.000"
                         disabled={rentDisabled}
                         aria-invalid={Boolean(errors[index]?.landRentCopHaYear)}
                         value={block.landRentCopHaYear}
@@ -754,16 +677,25 @@ export function BlockEntryForm({
                       <Label htmlFor={`jornal-${index}`}>Costo del Jornal (COP/jornal)</Label>
                       <NumericInput
                         id={`jornal-${index}`}
-                        placeholder="60.000"
+                        placeholder="50.000"
+                        aria-invalid={Boolean(errors[index]?.jornalCostCop)}
                         value={block.jornalCostCop}
                         onValueChange={(value) => updateBlock(index, "jornalCostCop", value)}
+                        className={errors[index]?.jornalCostCop ? "border-destructive" : ""}
                       />
+                      {errors[index]?.jornalCostCop ? (
+                        <p className="text-sm text-destructive">{errors[index]?.jornalCostCop}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Reemplaza el precio unitario de las labores en jornal.
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor={`soilValue-${index}`}>Valor del Suelo (COP/ha)</Label>
                       <NumericInput
                         id={`soilValue-${index}`}
-                        placeholder="30.000.000"
+                        placeholder="10.000.000"
                         disabled={soilDisabled}
                         aria-invalid={Boolean(errors[index]?.soilValueCopHa)}
                         value={block.soilValueCopHa}
@@ -781,19 +713,19 @@ export function BlockEntryForm({
                       )}
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor={`commercialPrice-${index}`}>Precio de Comercialización (COP/kg)</Label>
+                      <Label htmlFor={`commercialPrice-${index}`}>Precio de Comercialización (COP/kg) *</Label>
                       <NumericInput
                         id={`commercialPrice-${index}`}
                         required
                         aria-invalid={Boolean(errors[index]?.commercialPriceCopKg)}
-                        placeholder="4.000"
+                        placeholder="1.000"
                         value={block.commercialPriceCopKg}
                         onValueChange={(value) => updateBlock(index, "commercialPriceCopKg", value)}
                         className={errors[index]?.commercialPriceCopKg ? "border-destructive" : ""}
                       />
                       {errors[index]?.commercialPriceCopKg ? (
                         <p className="text-sm text-destructive">{errors[index]?.commercialPriceCopKg}</p>
-                      ) : null}
+                      ) : null }
                     </div>
                   </div>
                 </div>

@@ -2,11 +2,13 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 
 import type { Database } from "@/types/database"
 import { normalizeText } from "./normalize"
+import { adjustedQuantityForSlope } from "./slope-adjustment"
 import { deriveStage, type ProductionStageId } from "./stage"
 
 type CostTemplateLine = Database["public"]["Tables"]["cost_template_lines"]["Row"]
 type InputPriceRow = Database["public"]["Tables"]["input_price_rows"]["Row"]
 type AgronomicProfile = Database["public"]["Tables"]["crop_variety_agronomic_profiles"]["Row"]
+type YieldCurvePoint = Database["public"]["Tables"]["yield_curve_points"]["Row"]
 type ResolvedInsumoInsert = Database["public"]["Tables"]["resolved_insumo_lines"]["Insert"]
 
 export interface ResolveInsumosInput {
@@ -17,8 +19,10 @@ export interface ResolveInsumosInput {
   ageYears: number
   cropName?: string | null
   varietyName?: string | null
+  fitosanitaryCondition?: string | null
   jornalCostCop?: number | null
   landRentCopHaYear?: number | null
+  slopePercent?: number | null
 }
 
 export interface ResolvedInsumo {
@@ -72,8 +76,14 @@ function firstPricesByInput(prices: InputPriceRow[]): Map<string, InputPriceRow>
   return byInput
 }
 
-function fixedPriceForLine(line: CostTemplateLine, jornalCostCop: number | null, landRentCopHaYear: number | null) {
+function fixedPriceForLine(
+  line: CostTemplateLine,
+  jornalCostCop: number | null,
+  defaultJornalCostCop: number | null,
+  landRentCopHaYear: number | null,
+) {
   if (line.unit_price_mode === "jornal_lookup" && jornalCostCop !== null) return jornalCostCop
+  if (line.unit_price_mode === "jornal_lookup" && defaultJornalCostCop !== null) return defaultJornalCostCop
 
   const inputGroup = normalizeText(line.input_group_name)
   const inputName = normalizeText(line.input_name)
@@ -96,29 +106,46 @@ export async function resolveInsumosWithContext({
   ageYears,
   cropName,
   varietyName,
+  fitosanitaryCondition,
   jornalCostCop = null,
   landRentCopHaYear = null,
+  slopePercent = null,
 }: ResolveInsumosInput): Promise<ResolvedInsumosResult> {
-  const profileResponse = await supabase
-    .from("crop_variety_agronomic_profiles")
-    .select("*")
-    .eq("crop_id", cropId)
-    .eq("variety_id", varietyId)
-    .maybeSingle()
+  const [profileResponse, maxYieldCurveAgeResponse] = await Promise.all([
+    supabase
+      .from("crop_variety_agronomic_profiles")
+      .select("*")
+      .eq("crop_id", cropId)
+      .eq("variety_id", varietyId)
+      .maybeSingle(),
+    supabase
+      .from("yield_curve_points")
+      .select("age_years")
+      .eq("crop_id", cropId)
+      .eq("variety_id", varietyId)
+      .order("age_years", { ascending: false })
+      .limit(1)
+      .returns<Array<Pick<YieldCurvePoint, "age_years">>>()
+      .maybeSingle(),
+  ])
 
   const profile = profileResponse.data as AgronomicProfile | null
   const profileError = profileResponse.error
   if (profileError) throw profileError
+  if (maxYieldCurveAgeResponse.error) throw maxYieldCurveAgeResponse.error
   if (!profile) {
     throw new Error(`No hay perfil agronomico para crop=${cropId}, variety=${varietyId}.`)
   }
 
   const harvestStartYear = toNumber(profile.harvest_start_year)
+  const maxYieldCurveAgeYears = toNumber(maxYieldCurveAgeResponse.data?.age_years)
   const stage = deriveStage({
     ageYears,
     harvestStartYear,
     cropName,
     varietyName,
+    fitosanitaryCondition,
+    maxYieldCurveAgeYears,
   })
 
   const { data: templateLines, error: templateError } = await supabase
@@ -156,14 +183,28 @@ export async function resolveInsumosWithContext({
   }
 
   const pricesByInput = firstPricesByInput(priceRows)
+
+  const { data: departmentJornalCost, error: departmentJornalCostError } = await supabase
+    .from("department_jornal_costs")
+    .select("jornal_without_food_cop")
+    .eq("departamento_id", departamentoId)
+    .eq("active", true)
+    .maybeSingle()
+
+  if (departmentJornalCostError) throw departmentJornalCostError
+
+  const defaultJornalCostCop = toNumber(departmentJornalCost?.jornal_without_food_cop)
   const lines = (templateLines || []).map((line): ResolvedInsumo => {
     const normalizedInputName = line.normalized_input_name || ""
     const price = pricesByInput.get(normalizedInputName) || null
-    const quantity = toNumber(line.quantity)
+    const usesJornalOverride = line.unit_price_mode === "jornal_lookup" && jornalCostCop !== null
+    const usesDefaultJornal =
+      line.unit_price_mode === "jornal_lookup" && jornalCostCop === null && defaultJornalCostCop !== null
+    const quantity = adjustedQuantityForSlope(line, slopePercent)
     const unitPriceCop =
       line.unit_price_mode === "input_price_lookup"
         ? toNumber(price?.average_price_final_cop)
-        : fixedPriceForLine(line, jornalCostCop, landRentCopHaYear)
+        : fixedPriceForLine(line, jornalCostCop, defaultJornalCostCop, landRentCopHaYear)
     const totalCop = quantity !== null && unitPriceCop !== null ? quantity * unitPriceCop : null
 
     return {
@@ -187,7 +228,11 @@ export async function resolveInsumosWithContext({
       unitPriceSource:
         line.unit_price_mode === "input_price_lookup"
           ? price?.price_source || (price ? "Precio Promedio Final" : "Precio no encontrado")
-          : line.unit_price_mode === "jornal_lookup"
+          : usesJornalOverride
+            ? "Costo del Jornal"
+            : usesDefaultJornal
+              ? "Jornal departamental"
+            : line.unit_price_mode === "jornal_lookup"
             ? "Jornal de referencia"
             : "Precio fijo",
       totalCop,
