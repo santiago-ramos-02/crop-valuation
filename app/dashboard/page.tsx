@@ -244,6 +244,10 @@ export default function DashboardPage() {
     }
   }
 
+  function startNewValuation() {
+    router.push(`/valuation/new?fresh=${Date.now()}`)
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -258,7 +262,7 @@ export default function DashboardPage() {
               <p className="text-gray-600 mt-1">Gestiona y revisa todas tus valuaciones agrícolas</p>
             </div>
             <Button
-              onClick={() => router.push(`/valuation/new?fresh=${Date.now()}`)}
+              onClick={startNewValuation}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               Nueva Valuación

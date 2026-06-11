@@ -10,6 +10,10 @@ import { Header } from "@/components/header"
 export function HomePageClient() {
   const router = useRouter()
 
+  function startNewValuation() {
+    router.push(`/valuation/new?fresh=${Date.now()}`)
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -28,7 +32,7 @@ export function HomePageClient() {
             <div className="flex justify-center gap-4 pt-4">
               <Button
                 size="lg"
-                onClick={() => router.push(`/valuation/new?fresh=${Date.now()}`)}
+                onClick={startNewValuation}
                 className="bg-emerald-600 hover:bg-emerald-700"
               >
                 <PlusIcon className="h-5 w-5 mr-2" />
