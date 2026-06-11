@@ -220,7 +220,6 @@ export async function saveValuation({
         varietyId: block.varietyId,
         departamentoId: validated.departamentoId,
         currentStageId: result.stageId,
-        profile: result.profile,
         ageYears,
         cropAreaHa,
         densityPlantsHa,

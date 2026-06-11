@@ -1,12 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
-import { equilibriumAgeFromAnnualFlows } from "@/lib/appraisal/equilibrium-year"
+import { capitalizedEquilibriumAgeFromAnnualFlows } from "@/lib/appraisal/equilibrium-year"
 import { normalizeText } from "@/lib/insumos/normalize"
 import { adjustedQuantityForSlope } from "@/lib/insumos/slope-adjustment"
 import type { ProductionStageId } from "@/lib/insumos/stage"
 import type { Database, Json } from "@/types/database"
 
-type AgronomicProfile = Database["public"]["Tables"]["crop_variety_agronomic_profiles"]["Row"]
 type CostTemplateLine = Database["public"]["Tables"]["cost_template_lines"]["Row"]
 type InputPriceRow = Database["public"]["Tables"]["input_price_rows"]["Row"]
 type YieldCurvePoint = Database["public"]["Tables"]["yield_curve_points"]["Row"]
@@ -72,7 +71,6 @@ export interface CalculateCropAppraisalInput {
   varietyId: string
   departamentoId: string
   currentStageId: ProductionStageId
-  profile: AgronomicProfile
   ageYears: number
   cropAreaHa: number
   densityPlantsHa: number | null
@@ -186,6 +184,17 @@ function costOpportunityPeriods(currentYear: number, flowAgeYears: number) {
   return currentYear - flowAgeYears + 1
 }
 
+function nextCapitalizedNetFlowCopHa(
+  previousCapitalizedNetFlowCopHa: number,
+  previousAgeYears: number,
+  ageYears: number,
+  netFlowCopHa: number,
+  discountRateEa: number,
+) {
+  const elapsedYears = Math.max(0, ageYears - previousAgeYears)
+  return previousCapitalizedNetFlowCopHa * (1 + discountRateEa) ** elapsedYears + netFlowCopHa * (1 + discountRateEa)
+}
+
 function annualCostForPoint(
   point: YieldCurvePoint,
   nextPoint: YieldCurvePoint | undefined,
@@ -220,7 +229,6 @@ export async function calculateCropAppraisal({
   varietyId,
   departamentoId,
   currentStageId,
-  profile,
   ageYears,
   cropAreaHa,
   densityPlantsHa,
@@ -330,6 +338,9 @@ export async function calculateCropAppraisal({
 
   const factor = fitosanitaryFactor ?? 1
   let cumulativeNetFlowCopHa = 0
+  let capitalizedNetFlowCopHa = 0
+  let previousCapitalizedAgeYears = 0
+  const capitalizedNetFlowByAgeYears = new Map<number, number>()
   const annualFlows = flowPoints.map((point, index): CropAppraisalAnnualFlow => {
     const pointAge = toNumber(point.age_years) || index + 1
     const potentialYield = toNumber(point.potential_yield_kg_ha) || 0
@@ -347,13 +358,21 @@ export async function calculateCropAppraisal({
     )
     const netFlowCopHa = revenueCopHa - costCopHa
     cumulativeNetFlowCopHa += netFlowCopHa
+    capitalizedNetFlowCopHa = nextCapitalizedNetFlowCopHa(
+      capitalizedNetFlowCopHa,
+      previousCapitalizedAgeYears,
+      pointAge,
+      netFlowCopHa,
+      discountRateEa,
+    )
+    previousCapitalizedAgeYears = pointAge
+    capitalizedNetFlowByAgeYears.set(pointAge, capitalizedNetFlowCopHa)
 
     const isPastOrCurrent = pointAge <= currentYear
     const isRemainingYear = pointAge >= currentYear
     const opportunityPeriods = costOpportunityPeriods(currentYear, pointAge)
     const remainingIndex = pointAge - currentYear + 1
     const investmentFutureValueCopHa = isPastOrCurrent ? costCopHa * (1 + discountRateEa) ** opportunityPeriods : null
-    const capitalizedNetFlow = isPastOrCurrent ? netFlowCopHa * (1 + discountRateEa) ** opportunityPeriods : null
     const discountFactor = isRemainingYear ? (1 + discountRateEa) ** remainingIndex : null
 
     return {
@@ -367,7 +386,7 @@ export async function calculateCropAppraisal({
       netFlowCopHa,
       cumulativeNetFlowCopHa,
       investmentFutureValueCopHa,
-      pendingRecoveryCopHa: capitalizedNetFlow === null ? null : Math.max(0, -capitalizedNetFlow),
+      pendingRecoveryCopHa: Math.max(0, -capitalizedNetFlowCopHa),
       discountFactor,
       presentValueCopHa: discountFactor === null ? null : netFlowCopHa / discountFactor,
       isCurrentYear,
@@ -380,13 +399,7 @@ export async function calculateCropAppraisal({
 
   const startedProducing = currentFlow.adjustedYieldKgHa > 0
 
-  const capitalizedNetThroughCurrent = annualFlows
-    .filter((flow) => flow.ageYears <= currentYear)
-    .reduce(
-      (sum, flow) =>
-        sum + flow.netFlowCopHa * (1 + discountRateEa) ** costOpportunityPeriods(currentYear, flow.ageYears),
-      0,
-    )
+  const capitalizedNetThroughCurrent = capitalizedNetFlowByAgeYears.get(currentYear) ?? 0
   const vegetativeInvestmentCopHa = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
     .reduce(
@@ -396,7 +409,7 @@ export async function calculateCropAppraisal({
     )
   const pendingRecoveryBeforeRuleCopHa = Math.max(0, -capitalizedNetThroughCurrent)
   const pendingRecoveryCopHa = effectiveCurrentStageId === "salvamento" ? 0 : pendingRecoveryBeforeRuleCopHa
-  const foundBreakEvenAge = equilibriumAgeFromAnnualFlows(annualFlows) ?? toNumber(profile.harvest_start_year)
+  const foundBreakEvenAge = capitalizedEquilibriumAgeFromAnnualFlows(annualFlows, discountRateEa)
   const breakEvenReached = capitalizedNetThroughCurrent >= 0
   const remainingNpvCopHa = annualFlows.reduce((sum, flow) => sum + (flow.presentValueCopHa || 0), 0)
   const appraisalRule: AppraisalRule =
@@ -520,19 +533,28 @@ export function recalculateCropAppraisalWithCostDeltas(
   }
 
   let cumulativeNetFlowCopHa = 0
+  let capitalizedNetFlowCopHa = 0
+  let previousCapitalizedAgeYears = 0
+  const capitalizedNetFlowByAgeYears = new Map<number, number>()
   const annualFlows = appraisal.annualFlows.map((flow, index): CropAppraisalAnnualFlow => {
     const costCopHa = flow.costCopHa + flowCostDelta(flow, appraisal.annualFlows[index + 1], stageCostDeltasCopHa)
     const netFlowCopHa = flow.revenueCopHa - costCopHa
     cumulativeNetFlowCopHa += netFlowCopHa
+    capitalizedNetFlowCopHa = nextCapitalizedNetFlowCopHa(
+      capitalizedNetFlowCopHa,
+      previousCapitalizedAgeYears,
+      flow.ageYears,
+      netFlowCopHa,
+      appraisal.discountRateEa,
+    )
+    previousCapitalizedAgeYears = flow.ageYears
+    capitalizedNetFlowByAgeYears.set(flow.ageYears, capitalizedNetFlowCopHa)
 
     const isPastOrCurrent = flow.ageYears <= currentYear
     const opportunityPeriods = costOpportunityPeriods(currentYear, flow.ageYears)
     const remainingIndex = flow.ageYears - currentYear + 1
     const investmentFutureValueCopHa = isPastOrCurrent
       ? costCopHa * (1 + appraisal.discountRateEa) ** opportunityPeriods
-      : null
-    const capitalizedNetFlow = isPastOrCurrent
-      ? netFlowCopHa * (1 + appraisal.discountRateEa) ** opportunityPeriods
       : null
     const discountFactor = flow.isRemainingYear ? (1 + appraisal.discountRateEa) ** remainingIndex : null
 
@@ -542,7 +564,7 @@ export function recalculateCropAppraisalWithCostDeltas(
       netFlowCopHa,
       cumulativeNetFlowCopHa,
       investmentFutureValueCopHa,
-      pendingRecoveryCopHa: capitalizedNetFlow === null ? null : Math.max(0, -capitalizedNetFlow),
+      pendingRecoveryCopHa: Math.max(0, -capitalizedNetFlowCopHa),
       discountFactor,
       presentValueCopHa: discountFactor === null ? null : netFlowCopHa / discountFactor,
     }
@@ -551,13 +573,7 @@ export function recalculateCropAppraisalWithCostDeltas(
   const currentFlow = annualFlows.find((flow) => flow.ageYears === currentYear)
   if (!currentFlow) return appraisal
 
-  const capitalizedNetThroughCurrent = annualFlows
-    .filter((flow) => flow.ageYears <= currentYear)
-    .reduce(
-      (sum, flow) =>
-        sum + flow.netFlowCopHa * (1 + appraisal.discountRateEa) ** costOpportunityPeriods(currentYear, flow.ageYears),
-      0,
-    )
+  const capitalizedNetThroughCurrent = capitalizedNetFlowByAgeYears.get(currentYear) ?? 0
   const vegetativeInvestmentCopHa = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
     .reduce(
@@ -599,7 +615,7 @@ export function recalculateCropAppraisalWithCostDeltas(
     ...appraisal,
     appraisalRule,
     breakEvenReached,
-    breakEvenAgeYears: equilibriumAgeFromAnnualFlows(annualFlows) ?? appraisal.breakEvenAgeYears,
+    breakEvenAgeYears: capitalizedEquilibriumAgeFromAnnualFlows(annualFlows, appraisal.discountRateEa),
     currentYearCostCopHa: currentFlow.costCopHa,
     currentYearUtilityCopHa: currentFlow.netFlowCopHa,
     vegetativeInvestmentCopHa,

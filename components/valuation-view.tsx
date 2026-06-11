@@ -143,6 +143,7 @@ function displayBreakEvenAge(
     currentAgeYears: appraisal.current_age_years,
     currentYearUtilityCopHa: appraisal.current_year_utility_cop_ha,
     pendingRecoveryCopHa: appraisal.pending_recovery_cop_ha,
+    discountRateEa: appraisal.discount_rate_ea,
     referenceAgeYears: profile?.harvest_start_year,
   })
 }
