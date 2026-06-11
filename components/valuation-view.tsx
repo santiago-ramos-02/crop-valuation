@@ -505,6 +505,8 @@ function AppraisalMetrics({
   const hasBlockPendingRecovery = !isSalvage && hasPendingRecovery(appraisal.pending_recovery_cop_ha)
   const blockBreakEvenAge = hasBlockPendingRecovery ? displayBreakEvenAge(appraisal, annualFlows, profile) : null
   const currentYearSalvageCostCopHa = rawResultNumber(appraisal.raw_result, "current_year_salvage_cost_cop_ha")
+  const producedThisYear =
+    toNumber(appraisal.current_year_yield_kg_ha) > 0 || toNumber(appraisal.current_year_revenue_cop_ha) > 0
   const contextMetrics = [
     isSalvage
       ? { label: "Etapa", value: "Salvamento" }
@@ -540,13 +542,17 @@ function AppraisalMetrics({
         <div>
           <span className="font-medium">Edad del cultivo:</span> {formatNumber(appraisal.current_age_years)} años
         </div>
-        <div>
-          <span className="font-medium">Rendimiento del año:</span> {formatNumber(appraisal.current_year_yield_kg_ha)}{" "}
-          kg/ha
-        </div>
-        <div>
-          <span className="font-medium">Ingreso del año:</span> {formatCurrency(appraisal.current_year_revenue_cop_ha)}
-        </div>
+        {producedThisYear ? (
+          <>
+            <div>
+              <span className="font-medium">Rendimiento del año:</span>{" "}
+              {formatNumber(appraisal.current_year_yield_kg_ha)} kg/ha
+            </div>
+            <div>
+              <span className="font-medium">Ingreso del año:</span> {formatCurrency(appraisal.current_year_revenue_cop_ha)}
+            </div>
+          </>
+        ) : null}
         <div>
           <span className="font-medium">Costo del año:</span> {formatCurrency(appraisal.current_year_cost_cop_ha)}
         </div>
@@ -556,7 +562,8 @@ function AppraisalMetrics({
           </div>
         ) : null}
         <div>
-          <span className="font-medium">Utilidad del año:</span> {formatCurrency(appraisal.current_year_utility_cop_ha)}
+          <span className="font-medium">Utilidad del año:</span>{" "}
+          <span className="whitespace-nowrap">{formatCurrency(appraisal.current_year_utility_cop_ha)}</span>
         </div>
         {contextMetrics.map((metric) => (
           <div key={metric.label}>

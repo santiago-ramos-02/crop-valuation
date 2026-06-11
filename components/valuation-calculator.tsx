@@ -320,6 +320,7 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
         const blockBreakEvenAge = hasBlockPendingRecovery
           ? displayBreakEvenAge(appraisal, result.profile.harvest_start_year)
           : null
+        const producedThisYear = appraisal.currentYearYieldKgHa > 0 || appraisal.currentYearRevenueCopHa > 0
         const blockContextMetrics = [
           isSalvage
             ? { label: "Etapa", value: "Salvamento" }
@@ -372,14 +373,18 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
                 <div>
                   <span className="font-medium">Edad del cultivo:</span> {formatNumber(appraisal.currentAgeYears)} años
                 </div>
-                <div>
-                  <span className="font-medium">Rendimiento del año:</span>{" "}
-                  {formatNumber(appraisal.currentYearYieldKgHa)} kg/ha
-                </div>
-                <div>
-                  <span className="font-medium">Ingreso del año:</span>{" "}
-                  {formatCurrency(appraisal.currentYearRevenueCopHa)}
-                </div>
+                {producedThisYear ? (
+                  <>
+                    <div>
+                      <span className="font-medium">Rendimiento del año:</span>{" "}
+                      {formatNumber(appraisal.currentYearYieldKgHa)} kg/ha
+                    </div>
+                    <div>
+                      <span className="font-medium">Ingreso del año:</span>{" "}
+                      {formatCurrency(appraisal.currentYearRevenueCopHa)}
+                    </div>
+                  </>
+                ) : null}
                 <div>
                   <span className="font-medium">Costo del año:</span> {formatCurrency(appraisal.currentYearCostCopHa)}
                 </div>
@@ -391,7 +396,7 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
                 ) : null}
                 <div>
                   <span className="font-medium">Utilidad del año:</span>{" "}
-                  {formatCurrency(appraisal.currentYearUtilityCopHa)}
+                  <span className="whitespace-nowrap">{formatCurrency(appraisal.currentYearUtilityCopHa)}</span>
                 </div>
                 {blockContextMetrics.map((metric) => (
                   <div key={metric.label}>
