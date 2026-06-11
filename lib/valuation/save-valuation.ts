@@ -12,7 +12,7 @@ import {
   type ResolvedInsumosResult,
 } from "@/lib/insumos/resolve-insumos"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
-import type { BlockData, ParcelHeaderData } from "@/lib/valuation/form-data"
+import { normalizeBlockLabel, type BlockData, type ParcelHeaderData } from "@/lib/valuation/form-data"
 import type { Database, Json } from "@/types/database"
 
 type MunicipioCropAvailability = Database["public"]["Tables"]["municipio_crop_availability"]["Row"]
@@ -110,45 +110,47 @@ function validateInputs(parcelData: ParcelHeaderData, blockData: BlockData[]) {
 
   const slopePercent = optionalNumber(parcelData.slopePercent)
   if (slopePercent !== null && slopePercent < 0) throw new Error("La pendiente del predio debe ser mayor o igual a cero.")
-  if (blockData.length === 0) throw new Error("Debe registrar al menos un cultivo/lote.")
+  if (blockData.length === 0) throw new Error("Debe registrar al menos un cultivo.")
 
   const blocks = blockData.map((block, index): ValidatedBlock => {
-    requiredText(block.blockLabel, `El nombre del cultivo/lote ${index + 1} es requerido.`)
-    requiredText(block.cropId, `El cultivo del lote ${index + 1} es requerido para resolver los insumos.`)
-    requiredText(block.varietyId, `La variedad del lote ${index + 1} es requerida para resolver los insumos.`)
+    const normalizedBlock = { ...block, blockLabel: normalizeBlockLabel(block.blockLabel, index) }
+
+    requiredText(normalizedBlock.blockLabel, `El nombre del cultivo ${index + 1} es requerido.`)
+    requiredText(normalizedBlock.cropId, `El cultivo ${index + 1} es requerido para resolver los insumos.`)
+    requiredText(normalizedBlock.varietyId, `La variedad del cultivo ${index + 1} es requerida para resolver los insumos.`)
 
     const ageYears = requiredNumber(
-      block.ageYears,
-      `La edad del lote ${index + 1} es requerida para calcular la etapa y los insumos.`,
+      normalizedBlock.ageYears,
+      `La edad del cultivo ${index + 1} es requerida para calcular la etapa y los insumos.`,
     )
-    if (ageYears < 0) throw new Error(`La edad del lote ${index + 1} debe ser mayor o igual a cero.`)
+    if (ageYears < 0) throw new Error(`La edad del cultivo ${index + 1} debe ser mayor o igual a cero.`)
 
     const cropAreaHa = positiveRequiredNumber(
-      block.cropAreaHa,
-      `El área del cultivo/lote ${index + 1} es requerida y debe ser positiva.`,
+      normalizedBlock.cropAreaHa,
+      `El área del cultivo ${index + 1} es requerida y debe ser positiva.`,
     )
     const commercialPriceCopKg = positiveRequiredNumber(
-      block.commercialPriceCopKg,
-      `El precio de comercialización del lote ${index + 1} es requerido para calcular el avalúo.`,
+      normalizedBlock.commercialPriceCopKg,
+      `El precio de comercialización del cultivo ${index + 1} es requerido para calcular el avalúo.`,
     )
-    const jornalCostCop = optionalNumber(block.jornalCostCop)
-    const landRentCopHaYear = optionalNumber(block.landRentCopHaYear)
-    const soilValueCopHa = optionalNumber(block.soilValueCopHa)
+    const jornalCostCop = optionalNumber(normalizedBlock.jornalCostCop)
+    const landRentCopHaYear = optionalNumber(normalizedBlock.landRentCopHaYear)
+    const soilValueCopHa = optionalNumber(normalizedBlock.soilValueCopHa)
 
     if (jornalCostCop !== null && jornalCostCop < 0) {
-      throw new Error(`El costo del jornal del lote ${index + 1} debe ser mayor o igual a cero.`)
+      throw new Error(`El costo del jornal del cultivo ${index + 1} debe ser mayor o igual a cero.`)
     }
     if (landRentCopHaYear !== null && landRentCopHaYear < 0) {
-      throw new Error(`El costo de arriendo del lote ${index + 1} debe ser mayor o igual a cero.`)
+      throw new Error(`El costo de arriendo del cultivo ${index + 1} debe ser mayor o igual a cero.`)
     }
     if (soilValueCopHa !== null && soilValueCopHa < 0) {
-      throw new Error(`El valor del suelo del lote ${index + 1} debe ser mayor o igual a cero.`)
+      throw new Error(`El valor del suelo del cultivo ${index + 1} debe ser mayor o igual a cero.`)
     }
     if ((landRentCopHaYear || 0) > 0 && (soilValueCopHa || 0) > 0) {
-      throw new Error(`Registre costo de arriendo o valor del suelo en el lote ${index + 1}, no ambos.`)
+      throw new Error(`Registre costo de arriendo o valor del suelo en el cultivo ${index + 1}, no ambos.`)
     }
 
-    return { block, ageYears, cropAreaHa, commercialPriceCopKg }
+    return { block: normalizedBlock, ageYears, cropAreaHa, commercialPriceCopKg }
   })
 
   return { departamentoId, municipioId, discountRateMethod, discountRateEa, slopePercent, blocks }

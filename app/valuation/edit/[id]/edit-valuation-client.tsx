@@ -12,7 +12,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ValuationResultTables } from "@/components/valuation-calculator"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
-import { createEmptyBlock, type BlockData, type ParcelHeaderData, type ValuationStep } from "@/lib/valuation/form-data"
+import {
+  createEmptyBlock,
+  normalizeBlockLabel,
+  type BlockData,
+  type ParcelHeaderData,
+  type ValuationStep,
+} from "@/lib/valuation/form-data"
 import { saveValuation, type SavedBlockResolution } from "@/lib/valuation/save-valuation"
 import type { Database } from "@/types/database"
 
@@ -81,8 +87,8 @@ export default function EditValuationPageClient() {
           discountRateEa: valueToString(valuationCase.discount_rate_ea),
         })
 
-        const restoredBlocks = (blocks || []).map((block) => ({
-          blockLabel: block.block_label,
+        const restoredBlocks = (blocks || []).map((block, index) => ({
+          blockLabel: normalizeBlockLabel(block.block_label, index),
           cropId: block.crop_id,
           varietyId: block.variety_id,
           cropType: block.crop_type || "",
@@ -203,7 +209,7 @@ export default function EditValuationPageClient() {
               </div>
               <Button variant="outline" onClick={goBack} className="flex items-center gap-2 bg-transparent">
                 <ArrowLeftIcon className="h-4 w-4" />
-                Volver a Cultivos/Lotes
+                Volver a Cultivos
               </Button>
             </div>
 
@@ -235,9 +241,9 @@ export default function EditValuationPageClient() {
           <div className="max-w-6xl mx-auto space-y-8">
             <div className="flex items-center justify-between">
               <div className="space-y-2">
-                <h1 className="text-3xl font-bold text-balance">Editar Cultivos/Lotes</h1>
+                <h1 className="text-3xl font-bold text-balance">Editar Cultivos</h1>
                 <p className="text-muted-foreground text-pretty">
-                  Modificar cultivos/lotes individuales dentro del predio: {parcelData.parcelId}
+                  Modificar cultivos individuales dentro del predio: {parcelData.parcelId}
                 </p>
               </div>
               <Button variant="outline" onClick={goBack} className="flex items-center gap-2 bg-transparent">

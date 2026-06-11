@@ -7,9 +7,12 @@ import { Suspense } from "react"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Avaluos Agrícolas Profesionales",
-  description: "Avaluos Agrícolas Profesionales",
-    generator: 'v0.app'
+  title: "Avalúos Agrícolas Profesionales",
+  description: "Avalúos Agrícolas Profesionales",
+  icons: {
+    icon: "/igac-logo.svg",
+  },
+  generator: "v0.app",
 }
 
 export default function RootLayout({

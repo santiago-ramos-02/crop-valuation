@@ -17,6 +17,7 @@ import {
   createDefaultParcelHeaderData,
   createEmptyBlock,
   isValuationStep,
+  normalizeBlockLabel,
   parcelFields,
   type BlockData,
   type ParcelHeaderData,
@@ -49,11 +50,11 @@ function normalizeParcelData(value: Json | null | undefined): ParcelHeaderData |
   }, {} as ParcelHeaderData)
 }
 
-function normalizeBlock(value: unknown): BlockData | null {
+function normalizeBlock(value: unknown, index: number): BlockData | null {
   if (!isRecord(value)) return null
 
   return blockFields.reduce((block, field) => {
-    block[field] = formString(value[field])
+    block[field] = field === "blockLabel" ? normalizeBlockLabel(formString(value[field]), index) : formString(value[field])
     return block
   }, {} as BlockData)
 }
@@ -61,8 +62,8 @@ function normalizeBlock(value: unknown): BlockData | null {
 function normalizeBlockData(value: Json | null | undefined): BlockData[] | null {
   if (!Array.isArray(value)) return null
 
-  const blocks = value.flatMap((block) => {
-    const normalized = normalizeBlock(block)
+  const blocks = value.flatMap((block, index) => {
+    const normalized = normalizeBlock(block, index)
     return normalized ? [normalized] : []
   })
 
@@ -89,7 +90,7 @@ function hasMeaningfulBlockData(blocks: BlockData[]) {
 
   return blocks.some((block, index) =>
     Object.entries(block).some(([field, value]) => {
-      if (field === "blockLabel") return value.trim() !== "" && value.trim() !== `Lote ${index + 1}`
+      if (field === "blockLabel") return normalizeBlockLabel(value, index) !== normalizeBlockLabel("", index)
       return value.trim() !== ""
     }),
   )
@@ -323,7 +324,7 @@ export default function NewValuationPageClient() {
               </div>
               <Button variant="outline" onClick={goBack} className="flex w-full items-center gap-2 bg-transparent sm:w-auto">
                 <ArrowLeftIcon className="h-4 w-4" />
-                Volver a Cultivos/Lotes
+                Volver a Cultivos
               </Button>
             </div>
 
@@ -356,9 +357,9 @@ export default function NewValuationPageClient() {
           <div className="max-w-6xl mx-auto space-y-8">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-2">
-                <h1 className="text-3xl font-bold text-balance">Entrada de Cultivos/Lotes</h1>
+                <h1 className="text-3xl font-bold text-balance">Entrada de Cultivos</h1>
                 <p className="text-muted-foreground text-pretty">
-                  Configurar cultivos/lotes individuales dentro del predio: {parcelData.parcelId}
+                  Configurar cultivos individuales dentro del predio: {parcelData.parcelId}
                 </p>
               </div>
               <Button variant="outline" onClick={goBack} className="flex w-full items-center gap-2 bg-transparent sm:w-auto">

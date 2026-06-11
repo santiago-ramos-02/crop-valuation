@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { projectedEquilibriumAgeYears } from "@/lib/appraisal/equilibrium-year"
 import { PRODUCTION_STAGE_LABELS, isProductionStageId, productionStageBadgeClassName } from "@/lib/insumos/stage"
 import { createClient } from "@/lib/supabase/client"
+import { normalizeBlockLabel } from "@/lib/valuation/form-data"
 import type { Database } from "@/types/database"
 
 type ValuationCase = Database["public"]["Tables"]["valuation_cases"]["Row"]
@@ -412,7 +413,7 @@ function ValuationSummaryBand({
                 <dd className="text-base font-semibold">{formatCurrency(summary.averageValueCopPerPlant)}</dd>
               </div>
               <div className="min-w-0">
-                <dt className="text-xs text-muted-foreground">Cultivos/Lotes</dt>
+                <dt className="text-xs text-muted-foreground">Cultivos</dt>
                 <dd className="text-base font-semibold">{blocks.length}</dd>
               </div>
             </dl>
@@ -590,6 +591,7 @@ function CropBlockResultCard({
   crop,
   flows,
   lines,
+  position,
   profile,
   variety,
 }: Readonly<{
@@ -598,6 +600,7 @@ function CropBlockResultCard({
   crop: Crop | undefined
   flows: AnnualFlow[]
   lines: ResolvedLine[]
+  position: number
   profile: AgronomicProfile | undefined
   variety: Variety | undefined
 }>) {
@@ -606,7 +609,7 @@ function CropBlockResultCard({
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle>{block.block_label}</CardTitle>
+            <CardTitle>{normalizeBlockLabel(block.block_label, position)}</CardTitle>
             <CardDescription>
               {crop?.name || "Sin cultivo"} {variety?.name || ""}
             </CardDescription>
@@ -629,7 +632,7 @@ function CropBlockResultCard({
 function EmptyBlocksCard() {
   return (
     <Card>
-      <CardContent className="py-8 text-sm text-muted-foreground">No hay cultivos/lotes para mostrar.</CardContent>
+      <CardContent className="py-8 text-sm text-muted-foreground">No hay cultivos para mostrar.</CardContent>
     </Card>
   )
 }
@@ -711,7 +714,7 @@ export function ValuationViewClient() {
 
               {state.blocks.length === 0 ? <EmptyBlocksCard /> : null}
 
-              {state.blocks.map((block) => (
+              {state.blocks.map((block, index) => (
                 <CropBlockResultCard
                   key={block.id}
                   appraisal={state.appraisalsByBlock[block.id]}
@@ -719,6 +722,7 @@ export function ValuationViewClient() {
                   crop={state.cropsById.get(block.crop_id)}
                   flows={state.flowsByBlock[block.id] || []}
                   lines={state.linesByBlock[block.id] || []}
+                  position={index}
                   profile={state.profilesByCropVariety.get(cropVarietyKey(block.crop_id, block.variety_id))}
                   variety={state.varietiesById.get(block.variety_id)}
                 />

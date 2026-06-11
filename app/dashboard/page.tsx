@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Calendar, Edit, Eye, LayoutDashboard, MapPin, Search, Trash2 } from "lucide-react"
+import { useRouter } from "next/navigation"
 
 import { Header } from "@/components/header"
 import { Button } from "@/components/ui/button"
@@ -77,10 +78,6 @@ function formatNumber(amount: number) {
   return numberFormatter.format(amount)
 }
 
-function startNewValuation() {
-  window.location.href = `/valuation/new?fresh=${Date.now()}`
-}
-
 function valuationCaseTimestamp(valuationCase: ValuationCase) {
   return new Date(valuationCase.updated_at || valuationCase.created_at || valuationCase.valuation_asof_date).getTime()
 }
@@ -99,6 +96,7 @@ function latestCasesByCode(cases: ValuationCase[]) {
 }
 
 export default function DashboardPage() {
+  const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
   const { toast } = useToast()
 
@@ -260,7 +258,7 @@ export default function DashboardPage() {
               <p className="text-gray-600 mt-1">Gestiona y revisa todas tus valuaciones agrícolas</p>
             </div>
             <Button
-              onClick={startNewValuation}
+              onClick={() => router.push(`/valuation/new?fresh=${Date.now()}`)}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               Nueva Valuación
@@ -297,11 +295,11 @@ export default function DashboardPage() {
             </Card>
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Lotes por valuación</CardTitle>
+                <CardTitle className="text-sm font-medium">Cultivos por valuación</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{formatNumber(averageBlocks)}</div>
-                <div className="text-xs text-muted-foreground mt-1">Promedio de cultivos/lotes</div>
+                <div className="text-xs text-muted-foreground mt-1">Promedio de cultivos</div>
               </CardContent>
             </Card>
           </div>
@@ -371,10 +369,10 @@ export default function DashboardPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => (window.location.href = `/valuation/view/${valuation.id}`)}>
+                            <Button variant="ghost" size="sm" onClick={() => router.push(`/valuation/view/${valuation.id}`)}>
                               <Eye className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="sm" onClick={() => (window.location.href = `/valuation/edit/${valuation.id}`)}>
+                            <Button variant="ghost" size="sm" onClick={() => router.push(`/valuation/edit/${valuation.id}`)}>
                               <Edit className="h-4 w-4" />
                             </Button>
                             <Button
@@ -411,7 +409,7 @@ export default function DashboardPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Eliminar valuación</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción eliminará la valuación, el lote y los resultados asociados.
+              Esta acción eliminará la valuación, sus cultivos y los resultados asociados.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -12,6 +12,7 @@ import type { ResolvedInsumo } from "@/lib/insumos/resolve-insumos"
 import { productionStageBadgeClassName } from "@/lib/insumos/stage"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
+import { normalizeBlockLabel } from "@/lib/valuation/form-data"
 import type { SavedBlockResolution } from "@/lib/valuation/save-valuation"
 import {
   applyUnitPriceOverrides,
@@ -264,7 +265,7 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
                   <dd className="text-base font-semibold">{formatCurrency(averageValueCopPerPlant)}</dd>
                 </div>
                 <div className="min-w-0">
-                  <dt className="text-xs text-muted-foreground">Cultivos/Lotes</dt>
+                  <dt className="text-xs text-muted-foreground">Cultivos</dt>
                   <dd className="text-base font-semibold">{displayedBlocks.length}</dd>
                 </div>
               </dl>
@@ -313,7 +314,7 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
         </Card>
       ) : null}
 
-      {displayedBlocks.map((savedBlock) => {
+      {displayedBlocks.map((savedBlock, index) => {
         const { cropBlockId, block, result, appraisal } = savedBlock
         const isSalvage = appraisal.stageId === "salvamento"
         const hasBlockPendingRecovery = !isSalvage && hasPendingRecovery(appraisal.pendingRecoveryCopHa)
@@ -336,7 +337,7 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
             <CardHeader>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <CardTitle>{block.blockLabel}</CardTitle>
+                  <CardTitle>{normalizeBlockLabel(block.blockLabel, index)}</CardTitle>
                   <CardDescription>Resultado del cultivo registrado</CardDescription>
                 </div>
                 <div className="flex flex-wrap gap-2">

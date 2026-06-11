@@ -48,6 +48,17 @@ export type ValuationStep = "parcel-form" | "block-form" | "calculation"
 export const defaultDiscountRateMethod = "Finagro"
 export const defaultDiscountRateEa = "0.08462342102763798"
 
+function defaultBlockLabel(index = 0) {
+  return `Cultivo ${index + 1}`
+}
+
+export function normalizeBlockLabel(value: string, index = 0) {
+  const trimmed = value.trim()
+  const legacyDefault = /^Lote\s+(\d+)$/i.exec(trimmed)
+  if (legacyDefault) return `Cultivo ${legacyDefault[1]}`
+  return trimmed || defaultBlockLabel(index)
+}
+
 export function createDefaultParcelHeaderData(): ParcelHeaderData {
   return {
     valuationAsOfDate: new Date().toISOString().slice(0, 10),
@@ -72,7 +83,7 @@ export function createDefaultParcelHeaderData(): ParcelHeaderData {
 
 export function createEmptyBlock(index = 0): BlockData {
   return {
-    blockLabel: `Lote ${index + 1}`,
+    blockLabel: defaultBlockLabel(index),
     cropId: "",
     varietyId: "",
     cropType: "",

@@ -1,6 +1,6 @@
 # Plataforma de Avaluos Agricolas
 
-Aplicacion web interna para registrar predios agricolas, capturar cultivos/lotes y calcular el avaluo final del cultivo con reglas mantenidas en Supabase.
+Aplicacion web interna para registrar predios agricolas, capturar cultivos y calcular el avaluo final del cultivo con reglas mantenidas en Supabase.
 
 ## Stack
 
@@ -12,13 +12,13 @@ Aplicacion web interna para registrar predios agricolas, capturar cultivos/lotes
 ## Flujo Principal
 
 1. Capturar encabezado del predio: departamento, municipio, condicion agroecologica y tasa de descuento.
-2. Capturar cada cultivo/lote: cultivo, variedad, edad, area, condicion fitosanitaria, jornal, arriendo y precio comercial.
+2. Capturar cada cultivo: cultivo, variedad, edad, area, condicion fitosanitaria, jornal, arriendo y precio comercial.
 3. Resolver etapa productiva e insumos desde los catalogos sembrados en Supabase.
 4. Calcular el avaluo final del cultivo:
    - etapa vegetativa: inversion acumulada mas costo de oportunidad;
    - produccion antes de equilibrio: utilidad del ano mas recuperacion pendiente;
    - equilibrio alcanzado: utilidad del ano.
-5. Guardar el caso, los lotes, el resultado de avaluo y los flujos anuales en Supabase.
+5. Guardar el caso, los cultivos, el resultado de avaluo y los flujos anuales en Supabase.
 
 ## Modulos Relevantes
 
@@ -26,7 +26,7 @@ Aplicacion web interna para registrar predios agricolas, capturar cultivos/lotes
 | --- | --- |
 | `app/valuation/new/page.tsx` | Flujo guiado para crear una valuacion. |
 | `components/parcel-header-form.tsx` | Captura del predio y tasa de descuento. |
-| `components/block-entry-form.tsx` | Captura de cultivos/lotes. |
+| `components/block-entry-form.tsx` | Captura de cultivos. |
 | `components/valuation-calculator.tsx` | Persistencia del caso, insumos resueltos y avaluo final. |
 | `lib/insumos/resolve-insumos.ts` | Resolucion de insumos por cultivo, variedad, etapa y departamento. |
 | `lib/appraisal/calculate-crop-appraisal.ts` | Calculo del avaluo final y flujos anuales. |

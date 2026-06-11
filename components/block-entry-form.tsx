@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
-import { createEmptyBlock, type BlockData } from "@/lib/valuation/form-data"
+import { createEmptyBlock, normalizeBlockLabel, type BlockData } from "@/lib/valuation/form-data"
 import type { Database } from "@/types/database"
 
 type Crop = Database["public"]["Tables"]["crops"]["Row"]
@@ -138,6 +138,15 @@ function availabilityKey(cropId: string, varietyId: string) {
   return `${cropId}:${varietyId}`
 }
 
+function nextBlockIndex(blocks: BlockData[]) {
+  return blocks.reduce((nextIndex, block, index) => {
+    const label = normalizeBlockLabel(block.blockLabel, index)
+    const labelNumber = /^Cultivo\s+(\d+)$/i.exec(label)
+    const currentIndex = labelNumber ? Number(labelNumber[1]) : index + 1
+    return Math.max(nextIndex, currentIndex)
+  }, 0)
+}
+
 export function BlockEntryForm({
   blocks,
   onSubmit,
@@ -236,7 +245,7 @@ export function BlockEntryForm({
   const totalBlockArea = blocks.reduce((sum, block) => sum + (toNumber(block.cropAreaHa) || 0), 0)
   const areaWarning =
     totalParcelAreaHa && totalBlockArea > totalParcelAreaHa
-      ? `El área de cultivos/lotes (${totalBlockArea.toLocaleString("es-CO")} ha) supera el área total del predio.`
+      ? `El área de cultivos (${totalBlockArea.toLocaleString("es-CO")} ha) supera el área total del predio.`
       : null
 
   const getProfile = (block: BlockData) =>
@@ -301,7 +310,7 @@ export function BlockEntryForm({
   }
 
   const addBlock = () => {
-    onChange([...blocks, createEmptyBlock(blocks.length)])
+    onChange([...blocks, createEmptyBlock(nextBlockIndex(blocks))])
   }
 
   const removeBlock = (index: number) => {
@@ -330,7 +339,7 @@ export function BlockEntryForm({
       const jornalCostCop = block.jornalCostCop.trim() ? toNumber(block.jornalCostCop) : null
       const soilValueCopHa = block.soilValueCopHa.trim() ? toNumber(block.soilValueCopHa) : null
 
-      if (!block.blockLabel.trim()) blockErrors.blockLabel = "El nombre del cultivo/lote es requerido"
+      if (!block.blockLabel.trim()) blockErrors.blockLabel = "El nombre del cultivo es requerido"
       if (!municipioId) {
         blockErrors.cropId = "Seleccione un municipio para consultar cultivos disponibles"
       } else if (!block.cropId) {
@@ -419,13 +428,13 @@ export function BlockEntryForm({
           const soilDisabled = hasLandRent && !hasSoilValue
 
           return (
-            <Card key={`${block.blockLabel}-${index}`} className="w-full">
+            <Card key={normalizeBlockLabel(block.blockLabel, index)} className="w-full">
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-xl flex items-center gap-2">
                       <SproutIcon className="h-5 w-5 text-emerald-600" />
-                      Cultivo/Lote {index + 1}
+                      Cultivo {index + 1}
                     </CardTitle>
                     <CardDescription>Datos del cultivo y condiciones del predio</CardDescription>
                   </div>
@@ -737,7 +746,7 @@ export function BlockEntryForm({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <Button type="button" variant="outline" onClick={addBlock} className="flex w-full items-center gap-2 bg-transparent sm:w-auto">
             <PlusIcon className="h-4 w-4" />
-            Agregar Cultivo/Lote
+            Agregar Cultivo
           </Button>
 
           <Button type="submit" disabled={isLoading || isAvailabilityLoading} className="w-full sm:w-auto sm:min-w-32">

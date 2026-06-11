@@ -356,7 +356,7 @@ export function ParcelHeaderForm({ onSubmit, onChange, value: formData, isLoadin
               Limpiar Formulario
             </Button>
             <Button type="submit" disabled={isLoading} className="min-w-32">
-              {isLoading ? "Guardando..." : "Continuar a Cultivos/Lotes"}
+              {isLoading ? "Guardando..." : "Continuar a Cultivos"}
             </Button>
           </div>
         </form>
