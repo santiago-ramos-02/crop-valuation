@@ -313,13 +313,13 @@ export default function NewValuationPageClient() {
     return (
       <div className="min-h-screen bg-background">
         <Header />
-        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 min-h-[calc(100vh-3.5rem)] p-6">
+        <div className="bg-linear-to-br from-emerald-50 to-teal-50 min-h-[calc(100vh-3.5rem)] p-6">
           <div className="max-w-6xl mx-auto space-y-8">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-2">
                 <h1 className="text-3xl font-bold text-balance">Resultado de Valuación</h1>
                 <p className="text-muted-foreground text-pretty">
-                  Revisar la información y presentar el avalúo final del predio: {parcelData.parcelId}
+                  Revisar la información y presentar el avalúo final del cultivo: {parcelData.parcelId}
                 </p>
               </div>
               <Button variant="outline" onClick={goBack} className="flex w-full items-center gap-2 bg-transparent sm:w-auto">

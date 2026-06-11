@@ -198,13 +198,13 @@ export default function EditValuationPageClient() {
     return (
       <div className="min-h-screen bg-background">
         <Header />
-        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 min-h-[calc(100vh-3.5rem)] p-6">
+        <div className="bg-linear-to-br from-emerald-50 to-teal-50 min-h-[calc(100vh-3.5rem)] p-6">
           <div className="max-w-6xl mx-auto space-y-8">
             <div className="flex items-center justify-between">
               <div className="space-y-2">
                 <h1 className="text-3xl font-bold text-balance">Resultado de Valuación</h1>
                 <p className="text-muted-foreground text-pretty">
-                  Revisar la información y actualizar el avalúo final del predio: {parcelData.parcelId}
+                  Revisar la información y actualizar el avalúo final del cultivo: {parcelData.parcelId}
                 </p>
               </div>
               <Button variant="outline" onClick={goBack} className="flex items-center gap-2 bg-transparent">

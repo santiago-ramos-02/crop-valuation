@@ -124,6 +124,20 @@ function parseDisplayNumber(value: string | number | null | undefined) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function rawResultNumber(rawResult: AppraisalResult["raw_result"], key: string) {
+  if (!isRecord(rawResult)) return null
+
+  const value = rawResult[key]
+  if (typeof value !== "number" && typeof value !== "string") return null
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function formatEquilibriumYear(value: string | number | null | undefined) {
   const parsed = parseDisplayNumber(value)
   return parsed === null ? "No disponible" : `Año ${formatNumber(parsed)}`
@@ -387,13 +401,13 @@ function ValuationSummaryBand({
   return (
     <Card className="gap-3 py-5">
       <CardHeader>
-        <CardTitle>Resumen del predio</CardTitle>
+        <CardTitle>Resumen del cultivo</CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="grid gap-5 sm:grid-cols-[minmax(220px,0.9fr)_minmax(0,1fr)]">
             <div className="space-y-1">
-              <div className="text-sm text-muted-foreground">Avalúo final del predio</div>
+              <div className="text-sm text-muted-foreground">Avalúo final del cultivo</div>
               <div className="text-4xl font-semibold tracking-normal text-emerald-700">
                 {formatCurrency(summary.totalAppraisedValue)}
               </div>
@@ -491,6 +505,7 @@ function AppraisalMetrics({
   const isSalvage = appraisal.stage_id === "salvamento"
   const hasBlockPendingRecovery = !isSalvage && hasPendingRecovery(appraisal.pending_recovery_cop_ha)
   const blockBreakEvenAge = hasBlockPendingRecovery ? displayBreakEvenAge(appraisal, annualFlows, profile) : null
+  const currentYearSalvageCostCopHa = rawResultNumber(appraisal.raw_result, "current_year_salvage_cost_cop_ha")
   const contextMetrics = [
     isSalvage
       ? { label: "Etapa", value: "Salvamento" }
@@ -533,6 +548,11 @@ function AppraisalMetrics({
         <div>
           <span className="font-medium">Costo del año:</span> {formatCurrency(appraisal.current_year_cost_cop_ha)}
         </div>
+        {currentYearSalvageCostCopHa !== null && currentYearSalvageCostCopHa > 0 ? (
+          <div>
+            <span className="font-medium">Costo de salvamento:</span> {formatCurrency(currentYearSalvageCostCopHa)}
+          </div>
+        ) : null}
         <div>
           <span className="font-medium">Utilidad del año:</span> {formatCurrency(appraisal.current_year_utility_cop_ha)}
         </div>

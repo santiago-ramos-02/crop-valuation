@@ -49,6 +49,7 @@ export interface CalculatedCropAppraisal {
   currentYearYieldKgHa: number
   currentYearRevenueCopHa: number
   currentYearCostCopHa: number
+  currentYearSalvageCostCopHa: number
   currentYearUtilityCopHa: number
   vegetativeInvestmentCopHa: number
   pendingRecoveryCopHa: number
@@ -186,17 +187,21 @@ function costOpportunityPeriods(currentYear: number, flowAgeYears: number) {
 
 function annualCostForPoint(
   point: YieldCurvePoint,
+  costTotals: Record<ProductionStageId, number>,
+  stageIdOverride?: ProductionStageId,
+) {
+  const stageId = stageIdOverride ?? point.stage_id
+  return costTotals[stageId]
+}
+
+function currentYearSalvageCostForPoint(
+  point: YieldCurvePoint,
   nextPoint: YieldCurvePoint | undefined,
   costTotals: Record<ProductionStageId, number>,
   stageIdOverride?: ProductionStageId,
-  includeTransitionSalvage = true,
 ) {
   const stageId = stageIdOverride ?? point.stage_id
-  const salvageCost =
-    includeTransitionSalvage && stageId === "mantenimiento" && nextPoint?.stage_id !== "mantenimiento"
-      ? costTotals.salvamento
-      : 0
-  return costTotals[stageId] + salvageCost
+  return stageId === "mantenimiento" && nextPoint?.stage_id !== "mantenimiento" ? costTotals.salvamento : 0
 }
 
 function appraisedValueForRule(
@@ -335,13 +340,7 @@ export async function calculateCropAppraisal({
     const adjustedYieldKgHa = isCurrentYear && freshYieldKgHa !== null && freshYieldKgHa >= 0 ? freshYieldKgHa : curveYield
     const revenueCopHa = adjustedYieldKgHa * commercialPriceCopKg
     const stageId = isCurrentYear ? effectiveCurrentStageId : point.stage_id
-    const costCopHa = annualCostForPoint(
-      point,
-      flowPoints[index + 1],
-      totals,
-      stageId,
-      !usesSyntheticCurrentFlow,
-    )
+    const costCopHa = annualCostForPoint(point, totals, stageId)
     const netFlowCopHa = revenueCopHa - costCopHa
     cumulativeNetFlowCopHa += netFlowCopHa
 
@@ -371,10 +370,17 @@ export async function calculateCropAppraisal({
     }
   })
 
-  const currentFlow = annualFlows.find((flow) => flow.ageYears === currentYear)
+  const currentFlowIndex = annualFlows.findIndex((flow) => flow.ageYears === currentYear)
+  const currentFlow = annualFlows[currentFlowIndex]
   if (!currentFlow) throw new Error("No se encontró el año actual dentro de la curva de rendimiento.")
 
   const startedProducing = currentFlow.adjustedYieldKgHa > 0
+  const currentYearSalvageCostCopHa = currentYearSalvageCostForPoint(
+    flowPoints[currentFlowIndex],
+    flowPoints[currentFlowIndex + 1],
+    totals,
+    currentFlow.stageId,
+  )
 
   const cumulativeNetThroughCurrent = currentFlow.cumulativeNetFlowCopHa
   const vegetativeInvestmentCopHa = annualFlows
@@ -430,6 +436,7 @@ export async function calculateCropAppraisal({
     currentYearYieldKgHa: currentFlow.adjustedYieldKgHa,
     currentYearRevenueCopHa: currentFlow.revenueCopHa,
     currentYearCostCopHa: currentFlow.costCopHa,
+    currentYearSalvageCostCopHa,
     currentYearUtilityCopHa: currentFlow.netFlowCopHa,
     vegetativeInvestmentCopHa,
     pendingRecoveryCopHa,
@@ -478,6 +485,7 @@ export function buildCropAppraisalResultInsert(cropBlockId: string, appraisal: C
       vegetative_final_value_cop_ha: appraisal.vegetativeFinalValueCopHa,
       productive_final_value_cop_ha: appraisal.productiveFinalValueCopHa,
       decision_tree_value_cop_ha: appraisal.decisionTreeValueCopHa,
+      current_year_salvage_cost_cop_ha: appraisal.currentYearSalvageCostCopHa,
       missing_cost_line_count: appraisal.missingCostLineCount,
       stage_cost_totals_cop_ha: appraisal.stageCostTotalsCopHa,
     } as unknown as Json,
@@ -486,16 +494,9 @@ export function buildCropAppraisalResultInsert(cropBlockId: string, appraisal: C
 
 function flowCostDelta(
   flow: CropAppraisalAnnualFlow,
-  nextFlow: CropAppraisalAnnualFlow | undefined,
   stageCostDeltasCopHa: Partial<Record<ProductionStageId, number>>,
 ) {
-  const stageDelta = stageCostDeltasCopHa[flow.stageId] || 0
-  const salvageDelta =
-    flow.stageId === "mantenimiento" && nextFlow?.stageId !== "mantenimiento" && !nextFlow?.isCurrentYear
-      ? stageCostDeltasCopHa.salvamento || 0
-      : 0
-
-  return stageDelta + salvageDelta
+  return stageCostDeltasCopHa[flow.stageId] || 0
 }
 
 export function recalculateCropAppraisalWithCostDeltas(
@@ -510,8 +511,8 @@ export function recalculateCropAppraisalWithCostDeltas(
   }
 
   let cumulativeNetFlowCopHa = 0
-  const annualFlows = appraisal.annualFlows.map((flow, index): CropAppraisalAnnualFlow => {
-    const costCopHa = flow.costCopHa + flowCostDelta(flow, appraisal.annualFlows[index + 1], stageCostDeltasCopHa)
+  const annualFlows = appraisal.annualFlows.map((flow): CropAppraisalAnnualFlow => {
+    const costCopHa = flow.costCopHa + flowCostDelta(flow, stageCostDeltasCopHa)
     const netFlowCopHa = flow.revenueCopHa - costCopHa
     cumulativeNetFlowCopHa += netFlowCopHa
 
@@ -535,9 +536,14 @@ export function recalculateCropAppraisalWithCostDeltas(
     }
   })
 
-  const currentFlow = annualFlows.find((flow) => flow.ageYears === currentYear)
+  const currentFlowIndex = annualFlows.findIndex((flow) => flow.ageYears === currentYear)
+  const currentFlow = annualFlows[currentFlowIndex]
   if (!currentFlow) return appraisal
 
+  const currentYearSalvageCostCopHa =
+    currentFlow.stageId === "mantenimiento" && annualFlows[currentFlowIndex + 1]?.stageId !== "mantenimiento"
+      ? stageCostTotalsCopHa.salvamento
+      : 0
   const cumulativeNetThroughCurrent = currentFlow.cumulativeNetFlowCopHa
   const vegetativeInvestmentCopHa = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
@@ -582,6 +588,7 @@ export function recalculateCropAppraisalWithCostDeltas(
     breakEvenReached,
     breakEvenAgeYears: equilibriumAgeFromAnnualFlows(annualFlows),
     currentYearCostCopHa: currentFlow.costCopHa,
+    currentYearSalvageCostCopHa,
     currentYearUtilityCopHa: currentFlow.netFlowCopHa,
     vegetativeInvestmentCopHa,
     pendingRecoveryCopHa,

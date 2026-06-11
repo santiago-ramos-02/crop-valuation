@@ -239,13 +239,13 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
     <div className="space-y-6">
       <Card className="gap-3 py-5">
         <CardHeader>
-          <CardTitle>Resumen del predio</CardTitle>
+          <CardTitle>Resumen del cultivo</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="grid gap-5 sm:grid-cols-[minmax(220px,0.9fr)_minmax(0,1fr)]">
               <div className="space-y-1">
-                <div className="text-sm text-muted-foreground">Avalúo final del predio</div>
+                <div className="text-sm text-muted-foreground">Avalúo final del cultivo</div>
                 <div className="text-4xl font-semibold tracking-normal text-emerald-700">
                   {formatCurrency(totalAppraisedValue)}
                 </div>
@@ -381,6 +381,12 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
                 <div>
                   <span className="font-medium">Costo del año:</span> {formatCurrency(appraisal.currentYearCostCopHa)}
                 </div>
+                {appraisal.currentYearSalvageCostCopHa > 0 ? (
+                  <div>
+                    <span className="font-medium">Costo de salvamento:</span>{" "}
+                    {formatCurrency(appraisal.currentYearSalvageCostCopHa)}
+                  </div>
+                ) : null}
                 <div>
                   <span className="font-medium">Utilidad del año:</span>{" "}
                   {formatCurrency(appraisal.currentYearUtilityCopHa)}
