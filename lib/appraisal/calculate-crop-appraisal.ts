@@ -412,9 +412,9 @@ export async function calculateCropAppraisal({
     pendingRecoveryCopHa,
   )
   const vegetativeFinalValueCopHa = vegetativeInvestmentCopHa
-  const productiveFinalValueCopHa = startedProducing ? decisionTreeValueCopHa : 0
   const finalValueStage = startedProducing ? "productive" : "vegetative"
-  const appraisedValueCopHa = decisionTreeValueCopHa
+  const appraisedValueCopHa = Math.max(0, decisionTreeValueCopHa)
+  const productiveFinalValueCopHa = startedProducing ? appraisedValueCopHa : 0
   const appraisedValueCop = appraisedValueCopHa * cropAreaHa
   const appraisedValueCopPerPlant =
     densityPlantsHa !== null && densityPlantsHa > 0 ? appraisedValueCopHa / densityPlantsHa : null
@@ -573,9 +573,9 @@ export function recalculateCropAppraisalWithCostDeltas(
     pendingRecoveryCopHa,
   )
   const vegetativeFinalValueCopHa = vegetativeInvestmentCopHa
-  const productiveFinalValueCopHa = appraisal.startedProducing ? decisionTreeValueCopHa : 0
   const finalValueStage = appraisal.startedProducing ? "productive" : "vegetative"
-  const appraisedValueCopHa = decisionTreeValueCopHa
+  const appraisedValueCopHa = Math.max(0, decisionTreeValueCopHa)
+  const productiveFinalValueCopHa = appraisal.startedProducing ? appraisedValueCopHa : 0
   const appraisedValueCop = appraisedValueCopHa * appraisal.cropAreaHa
   const appraisedValueCopPerPlant =
     appraisal.densityPlantsHa !== null && appraisal.densityPlantsHa > 0

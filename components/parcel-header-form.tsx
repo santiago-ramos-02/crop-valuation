@@ -285,16 +285,6 @@ export function ParcelHeaderForm({ onSubmit, onChange, value: formData, isLoadin
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="aptitude">Aptitud UPRA/SIPRA</Label>
-                <Input
-                  id="aptitude"
-                  placeholder="Aptitud"
-                  value={formData.aptitudeUpraSipra}
-                  onChange={(event) => handleInputChange("aptitudeUpraSipra", event.target.value)}
-                />
-              </div>
-
-              <div className="space-y-2">
                 <Label htmlFor="slope">Pendiente del Predio (%)</Label>
                 <NumericInput
                   id="slope"

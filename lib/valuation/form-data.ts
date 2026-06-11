@@ -47,6 +47,8 @@ export type ValuationStep = "parcel-form" | "block-form" | "calculation"
 
 export const defaultDiscountRateMethod = "Finagro"
 export const defaultDiscountRateEa = "0.08462342102763798"
+export const defaultCropType = "Permanente"
+export const defaultProductionSystem = "Convencional"
 
 function defaultBlockLabel(index = 0) {
   return `Cultivo ${index + 1}`
@@ -86,8 +88,8 @@ export function createEmptyBlock(index = 0): BlockData {
     blockLabel: defaultBlockLabel(index),
     cropId: "",
     varietyId: "",
-    cropType: "",
-    productionSystem: "",
+    cropType: defaultCropType,
+    productionSystem: defaultProductionSystem,
     ageYears: "",
     fitosanitaryCondition: "",
     fitosanitaryFactor: "",

@@ -12,14 +12,24 @@ import {
   type ResolvedInsumosResult,
 } from "@/lib/insumos/resolve-insumos"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
-import { normalizeBlockLabel, type BlockData, type ParcelHeaderData } from "@/lib/valuation/form-data"
+import {
+  defaultCropType,
+  defaultProductionSystem,
+  normalizeBlockLabel,
+  type BlockData,
+  type ParcelHeaderData,
+} from "@/lib/valuation/form-data"
 import type { Database, Json } from "@/types/database"
 
 type MunicipioCropAvailability = Database["public"]["Tables"]["municipio_crop_availability"]["Row"]
+type CropName = Pick<Database["public"]["Tables"]["crops"]["Row"], "id" | "name">
+type VarietyName = Pick<Database["public"]["Tables"]["varieties"]["Row"], "id" | "name">
 
 export interface SavedBlockResolution {
   cropBlockId: string
   appraisalResultId: string
+  cropName: string | null
+  varietyName: string | null
   block: BlockData
   result: ResolvedInsumosResult
   appraisal: CalculatedCropAppraisal
@@ -113,41 +123,46 @@ function validateInputs(parcelData: ParcelHeaderData, blockData: BlockData[]) {
   if (blockData.length === 0) throw new Error("Debe registrar al menos un cultivo.")
 
   const blocks = blockData.map((block, index): ValidatedBlock => {
-    const normalizedBlock = { ...block, blockLabel: normalizeBlockLabel(block.blockLabel, index) }
+    const normalizedBlock = {
+      ...block,
+      blockLabel: normalizeBlockLabel(block.blockLabel, index),
+      cropType: block.cropType || defaultCropType,
+      productionSystem: block.productionSystem || defaultProductionSystem,
+    }
 
-    requiredText(normalizedBlock.blockLabel, `El nombre del cultivo ${index + 1} es requerido.`)
-    requiredText(normalizedBlock.cropId, `El cultivo ${index + 1} es requerido para resolver los insumos.`)
-    requiredText(normalizedBlock.varietyId, `La variedad del cultivo ${index + 1} es requerida para resolver los insumos.`)
+    requiredText(normalizedBlock.blockLabel, "El nombre del cultivo es requerido.")
+    requiredText(normalizedBlock.cropId, "El cultivo es requerido para resolver los insumos.")
+    requiredText(normalizedBlock.varietyId, "La variedad del cultivo es requerida para resolver los insumos.")
 
     const ageYears = requiredNumber(
       normalizedBlock.ageYears,
-      `La edad del cultivo ${index + 1} es requerida para calcular la etapa y los insumos.`,
+      "La edad del cultivo es requerida para calcular la etapa y los insumos.",
     )
-    if (ageYears < 0) throw new Error(`La edad del cultivo ${index + 1} debe ser mayor o igual a cero.`)
+    if (ageYears < 0) throw new Error("La edad del cultivo debe ser mayor o igual a cero.")
 
     const cropAreaHa = positiveRequiredNumber(
       normalizedBlock.cropAreaHa,
-      `El área del cultivo ${index + 1} es requerida y debe ser positiva.`,
+      "El área del cultivo es requerida y debe ser positiva.",
     )
     const commercialPriceCopKg = positiveRequiredNumber(
       normalizedBlock.commercialPriceCopKg,
-      `El precio de comercialización del cultivo ${index + 1} es requerido para calcular el avalúo.`,
+      "El precio de comercialización del cultivo es requerido para calcular el avalúo.",
     )
     const jornalCostCop = optionalNumber(normalizedBlock.jornalCostCop)
     const landRentCopHaYear = optionalNumber(normalizedBlock.landRentCopHaYear)
     const soilValueCopHa = optionalNumber(normalizedBlock.soilValueCopHa)
 
     if (jornalCostCop !== null && jornalCostCop < 0) {
-      throw new Error(`El costo del jornal del cultivo ${index + 1} debe ser mayor o igual a cero.`)
+      throw new Error("El costo del jornal del cultivo debe ser mayor o igual a cero.")
     }
     if (landRentCopHaYear !== null && landRentCopHaYear < 0) {
-      throw new Error(`El costo de arriendo del cultivo ${index + 1} debe ser mayor o igual a cero.`)
+      throw new Error("El costo de arriendo del cultivo debe ser mayor o igual a cero.")
     }
     if (soilValueCopHa !== null && soilValueCopHa < 0) {
-      throw new Error(`El valor del suelo del cultivo ${index + 1} debe ser mayor o igual a cero.`)
+      throw new Error("El valor del suelo del cultivo debe ser mayor o igual a cero.")
     }
     if ((landRentCopHaYear || 0) > 0 && (soilValueCopHa || 0) > 0) {
-      throw new Error(`Registre costo de arriendo o valor del suelo en el cultivo ${index + 1}, no ambos.`)
+      throw new Error("Registre costo de arriendo o valor del suelo en el cultivo, no ambos.")
     }
 
     return { block: normalizedBlock, ageYears, cropAreaHa, commercialPriceCopKg }
@@ -197,8 +212,23 @@ export async function saveValuation({
     supabase,
   })
 
+  const cropIds = Array.from(new Set(validated.blocks.map(({ block }) => block.cropId)))
+  const varietyIds = Array.from(new Set(validated.blocks.map(({ block }) => block.varietyId)))
+  const [cropsRes, varietiesRes] = await Promise.all([
+    supabase.from("crops").select("id,name").in("id", cropIds).returns<CropName[]>(),
+    supabase.from("varieties").select("id,name").in("id", varietyIds).returns<VarietyName[]>(),
+  ])
+
+  if (cropsRes.error) throw cropsRes.error
+  if (varietiesRes.error) throw varietiesRes.error
+
+  const cropNamesById = new Map((cropsRes.data || []).map((crop) => [crop.id, crop.name]))
+  const varietyNamesById = new Map((varietiesRes.data || []).map((variety) => [variety.id, variety.name]))
+
   const resolvedBlocks = await Promise.all(
     validated.blocks.map(async ({ block, ageYears, cropAreaHa, commercialPriceCopKg }) => {
+      const cropName = cropNamesById.get(block.cropId) || null
+      const varietyName = varietyNamesById.get(block.varietyId) || null
       const jornalCostCop = optionalNumber(block.jornalCostCop)
       const landRentCopHaYear = optionalNumber(block.landRentCopHaYear)
       const result = await resolveInsumosWithContext({
@@ -207,6 +237,8 @@ export async function saveValuation({
         varietyId: block.varietyId,
         departamentoId: validated.departamentoId,
         ageYears,
+        cropName,
+        varietyName,
         fitosanitaryCondition: block.fitosanitaryCondition,
         jornalCostCop,
         landRentCopHaYear,
@@ -233,7 +265,7 @@ export async function saveValuation({
         discountRateEa: validated.discountRateEa,
       })
 
-      return { block, ageYears, cropAreaHa, result, appraisal }
+      return { block, ageYears, cropAreaHa, cropName, varietyName, result, appraisal }
     }),
   )
 
@@ -321,7 +353,7 @@ export async function saveValuation({
 
   const persistedBlocks = await Promise.all(
     resolvedBlocks.map(async (resolvedBlock) => {
-      const { block, result, appraisal, ageYears, cropAreaHa } = resolvedBlock
+      const { block, result, appraisal, ageYears, cropAreaHa, cropName, varietyName } = resolvedBlock
       const plantDistanceM = numberOrNull(block.plantDistanceM) ?? numberOrNull(result.profile.default_plant_distance_m)
       const rowDistanceM = numberOrNull(block.rowDistanceM) ?? numberOrNull(result.profile.default_row_distance_m)
       const plantingDensityPlantsHa =
@@ -385,6 +417,8 @@ export async function saveValuation({
       return {
         cropBlockId: createdBlock.id,
         appraisalResultId: createdAppraisal.id,
+        cropName,
+        varietyName,
         block,
         result,
         appraisal,

@@ -16,6 +16,8 @@ import {
   blockFields,
   createDefaultParcelHeaderData,
   createEmptyBlock,
+  defaultCropType,
+  defaultProductionSystem,
   isValuationStep,
   normalizeBlockLabel,
   parcelFields,
@@ -54,7 +56,15 @@ function normalizeBlock(value: unknown, index: number): BlockData | null {
   if (!isRecord(value)) return null
 
   return blockFields.reduce((block, field) => {
-    block[field] = field === "blockLabel" ? normalizeBlockLabel(formString(value[field]), index) : formString(value[field])
+    if (field === "blockLabel") {
+      block[field] = normalizeBlockLabel(formString(value[field]), index)
+    } else if (field === "cropType") {
+      block[field] = formString(value[field]) || defaultCropType
+    } else if (field === "productionSystem") {
+      block[field] = formString(value[field]) || defaultProductionSystem
+    } else {
+      block[field] = formString(value[field])
+    }
     return block
   }, {} as BlockData)
 }
@@ -91,6 +101,8 @@ function hasMeaningfulBlockData(blocks: BlockData[]) {
   return blocks.some((block, index) =>
     Object.entries(block).some(([field, value]) => {
       if (field === "blockLabel") return normalizeBlockLabel(value, index) !== normalizeBlockLabel("", index)
+      if (field === "cropType") return value.trim() !== "" && value !== defaultCropType
+      if (field === "productionSystem") return value.trim() !== "" && value !== defaultProductionSystem
       return value.trim() !== ""
     }),
   )

@@ -14,6 +14,8 @@ import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
 import {
   createEmptyBlock,
+  defaultCropType,
+  defaultProductionSystem,
   normalizeBlockLabel,
   type BlockData,
   type ParcelHeaderData,
@@ -91,8 +93,8 @@ export default function EditValuationPageClient() {
           blockLabel: normalizeBlockLabel(block.block_label, index),
           cropId: block.crop_id,
           varietyId: block.variety_id,
-          cropType: block.crop_type || "",
-          productionSystem: block.production_system || "",
+          cropType: block.crop_type || defaultCropType,
+          productionSystem: block.production_system || defaultProductionSystem,
           ageYears: valueToString(block.age_years),
           fitosanitaryCondition: block.fitosanitary_condition || "",
           fitosanitaryFactor: valueToString(block.fitosanitary_factor),

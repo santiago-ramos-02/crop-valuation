@@ -12,7 +12,6 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { projectedEquilibriumAgeYears } from "@/lib/appraisal/equilibrium-year"
 import { PRODUCTION_STAGE_LABELS, isProductionStageId, productionStageBadgeClassName } from "@/lib/insumos/stage"
 import { createClient } from "@/lib/supabase/client"
-import { normalizeBlockLabel } from "@/lib/valuation/form-data"
 import type { Database } from "@/types/database"
 
 type ValuationCase = Database["public"]["Tables"]["valuation_cases"]["Row"]
@@ -539,6 +538,9 @@ function AppraisalMetrics({
       </div>
       <div className="grid gap-4 text-sm md:grid-cols-3 xl:grid-cols-6">
         <div>
+          <span className="font-medium">Edad del cultivo:</span> {formatNumber(appraisal.current_age_years)} años
+        </div>
+        <div>
           <span className="font-medium">Rendimiento del año:</span> {formatNumber(appraisal.current_year_yield_kg_ha)}{" "}
           kg/ha
         </div>
@@ -611,7 +613,6 @@ function CropBlockResultCard({
   crop,
   flows,
   lines,
-  position,
   profile,
   variety,
 }: Readonly<{
@@ -620,7 +621,6 @@ function CropBlockResultCard({
   crop: Crop | undefined
   flows: AnnualFlow[]
   lines: ResolvedLine[]
-  position: number
   profile: AgronomicProfile | undefined
   variety: Variety | undefined
 }>) {
@@ -629,10 +629,8 @@ function CropBlockResultCard({
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle>{normalizeBlockLabel(block.block_label, position)}</CardTitle>
-            <CardDescription>
-              {crop?.name || "Sin cultivo"} {variety?.name || ""}
-            </CardDescription>
+            <CardTitle>{crop?.name || "Cultivo"}</CardTitle>
+            <CardDescription>{variety?.name || "Resultado del cultivo registrado"}</CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className={productionStageBadgeClassName(block.derived_stage_id)}>
@@ -734,7 +732,7 @@ export function ValuationViewClient() {
 
               {state.blocks.length === 0 ? <EmptyBlocksCard /> : null}
 
-              {state.blocks.map((block, index) => (
+              {state.blocks.map((block) => (
                 <CropBlockResultCard
                   key={block.id}
                   appraisal={state.appraisalsByBlock[block.id]}
@@ -742,7 +740,6 @@ export function ValuationViewClient() {
                   crop={state.cropsById.get(block.crop_id)}
                   flows={state.flowsByBlock[block.id] || []}
                   lines={state.linesByBlock[block.id] || []}
-                  position={index}
                   profile={state.profilesByCropVariety.get(cropVarietyKey(block.crop_id, block.variety_id))}
                   variety={state.varietiesById.get(block.variety_id)}
                 />

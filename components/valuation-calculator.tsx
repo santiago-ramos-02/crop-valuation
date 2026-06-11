@@ -12,7 +12,6 @@ import type { ResolvedInsumo } from "@/lib/insumos/resolve-insumos"
 import { productionStageBadgeClassName } from "@/lib/insumos/stage"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
-import { normalizeBlockLabel } from "@/lib/valuation/form-data"
 import type { SavedBlockResolution } from "@/lib/valuation/save-valuation"
 import {
   applyUnitPriceOverrides,
@@ -314,8 +313,8 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
         </Card>
       ) : null}
 
-      {displayedBlocks.map((savedBlock, index) => {
-        const { cropBlockId, block, result, appraisal } = savedBlock
+      {displayedBlocks.map((savedBlock) => {
+        const { cropBlockId, cropName, varietyName, result, appraisal } = savedBlock
         const isSalvage = appraisal.stageId === "salvamento"
         const hasBlockPendingRecovery = !isSalvage && hasPendingRecovery(appraisal.pendingRecoveryCopHa)
         const blockBreakEvenAge = hasBlockPendingRecovery
@@ -337,8 +336,8 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
             <CardHeader>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <CardTitle>{normalizeBlockLabel(block.blockLabel, index)}</CardTitle>
-                  <CardDescription>Resultado del cultivo registrado</CardDescription>
+                  <CardTitle>{cropName || "Cultivo"}</CardTitle>
+                  <CardDescription>{varietyName || "Resultado del cultivo registrado"}</CardDescription>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="outline" className={productionStageBadgeClassName(result.stageId)}>
@@ -370,6 +369,9 @@ export function ValuationResultTables({ savedBlocks }: Readonly<ValuationResultT
               </div>
 
               <div className="grid gap-4 text-sm md:grid-cols-3 xl:grid-cols-6">
+                <div>
+                  <span className="font-medium">Edad del cultivo:</span> {formatNumber(appraisal.currentAgeYears)} años
+                </div>
                 <div>
                   <span className="font-medium">Rendimiento del año:</span>{" "}
                   {formatNumber(appraisal.currentYearYieldKgHa)} kg/ha

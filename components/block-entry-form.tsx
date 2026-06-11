@@ -13,7 +13,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { parseLocalizedNumberInput } from "@/lib/number-notation"
 import { createClient } from "@/lib/supabase/client"
-import { createEmptyBlock, normalizeBlockLabel, type BlockData } from "@/lib/valuation/form-data"
+import {
+  createEmptyBlock,
+  defaultCropType,
+  defaultProductionSystem,
+  normalizeBlockLabel,
+  type BlockData,
+} from "@/lib/valuation/form-data"
 import type { Database } from "@/types/database"
 
 type Crop = Database["public"]["Tables"]["crops"]["Row"]
@@ -238,6 +244,17 @@ export function BlockEntryForm({
   }, [municipioId, supabase])
 
   const optionsByGroup = useMemo(() => optionGroups(lookupOptions), [lookupOptions])
+  const cropTypeOptions = (optionsByGroup.crop_type || []).map((option) => ({ value: option.value, label: option.label }))
+  const productionSystemOptions = (optionsByGroup.production_system || []).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }))
+  const displayedCropTypeOptions = cropTypeOptions.some((option) => option.value === defaultCropType)
+    ? cropTypeOptions
+    : [{ value: defaultCropType, label: defaultCropType }, ...cropTypeOptions]
+  const displayedProductionSystemOptions = productionSystemOptions.some((option) => option.value === defaultProductionSystem)
+    ? productionSystemOptions
+    : [{ value: defaultProductionSystem, label: defaultProductionSystem }, ...productionSystemOptions]
   const currentAvailabilityRows = availabilityLoadedFor === municipioId ? availabilityRows : []
   const availableCropIds = new Set(currentAvailabilityRows.map((row) => row.crop_id))
   const availablePairKeys = new Set(currentAvailabilityRows.map((row) => availabilityKey(row.crop_id, row.variety_id)))
@@ -426,6 +443,9 @@ export function BlockEntryForm({
           const hasSoilValue = hasPositiveValue(block.soilValueCopHa)
           const rentDisabled = hasSoilValue && !hasLandRent
           const soilDisabled = hasLandRent && !hasSoilValue
+          const cropTitle = crops.find((crop) => crop.id === block.cropId)?.name || "Cultivo"
+          const cropTypeValue = block.cropType || defaultCropType
+          const productionSystemValue = block.productionSystem || defaultProductionSystem
 
           return (
             <Card key={normalizeBlockLabel(block.blockLabel, index)} className="w-full">
@@ -434,7 +454,7 @@ export function BlockEntryForm({
                   <div>
                     <CardTitle className="text-xl flex items-center gap-2">
                       <SproutIcon className="h-5 w-5 text-emerald-600" />
-                      Cultivo {index + 1}
+                      {cropTitle}
                     </CardTitle>
                     <CardDescription>Datos del cultivo y condiciones del predio</CardDescription>
                   </div>
@@ -488,10 +508,11 @@ export function BlockEntryForm({
                         <Label htmlFor={`cropType-${index}`}>Tipo de Cultivo</Label>
                         <SelectField
                           id={`cropType-${index}`}
-                          value={block.cropType}
+                          value={cropTypeValue}
                           onChange={(value) => updateBlock(index, "cropType", value)}
                           placeholder="Seleccione tipo"
-                          options={(optionsByGroup.crop_type || []).map((option) => ({ value: option.value, label: option.label }))}
+                          disabled
+                          options={displayedCropTypeOptions}
                         />
                       </div>
 
@@ -499,10 +520,11 @@ export function BlockEntryForm({
                         <Label htmlFor={`productionSystem-${index}`}>Sistema Productivo</Label>
                         <SelectField
                           id={`productionSystem-${index}`}
-                          value={block.productionSystem}
+                          value={productionSystemValue}
                           onChange={(value) => updateBlock(index, "productionSystem", value)}
                           placeholder="Seleccione sistema"
-                          options={(optionsByGroup.production_system || []).map((option) => ({ value: option.value, label: option.label }))}
+                          disabled
+                          options={displayedProductionSystemOptions}
                         />
                       </div>
 
