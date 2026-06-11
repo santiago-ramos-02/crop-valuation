@@ -11,7 +11,6 @@ export interface EquilibriumAgeInput {
   currentAgeYears: NumericInput
   currentYearUtilityCopHa: NumericInput
   pendingRecoveryCopHa: NumericInput
-  discountRateEa?: NumericInput
   referenceAgeYears?: NumericInput
 }
 
@@ -56,41 +55,6 @@ export function equilibriumAgeFromAnnualFlows(flows: EquilibriumFlowInput[]) {
   return null
 }
 
-export function capitalizedEquilibriumAgeFromAnnualFlows(
-  flows: EquilibriumFlowInput[],
-  discountRateEa: NumericInput,
-) {
-  const rate = numericValue(discountRateEa)
-  if (rate === null || rate < 0) return null
-
-  const validFlows = sortedValidFlows(flows)
-  let capitalizedNetFlowCopHa = 0
-  let previousAgeYears = 0
-
-  for (const flow of validFlows) {
-    const yearSpan = flow.ageYears - previousAgeYears
-    const capitalizedBeforeCurrentFlow = capitalizedNetFlowCopHa * (1 + rate) ** Math.max(0, yearSpan)
-    const previousCapitalizedNetFlowCopHa = capitalizedBeforeCurrentFlow
-    capitalizedNetFlowCopHa = capitalizedBeforeCurrentFlow + flow.netFlowCopHa * (1 + rate)
-
-    if (capitalizedNetFlowCopHa >= 0) {
-      if (previousCapitalizedNetFlowCopHa >= 0 || capitalizedNetFlowCopHa <= previousCapitalizedNetFlowCopHa) {
-        return flow.ageYears
-      }
-
-      const recoveryFraction = Math.min(
-        Math.max(-previousCapitalizedNetFlowCopHa / (capitalizedNetFlowCopHa - previousCapitalizedNetFlowCopHa), 0),
-        1,
-      )
-      return previousAgeYears + yearSpan * recoveryFraction
-    }
-
-    previousAgeYears = flow.ageYears
-  }
-
-  return null
-}
-
 export function projectedEquilibriumAgeYears({
   annualFlows,
   breakEvenAgeYears,
@@ -98,13 +62,9 @@ export function projectedEquilibriumAgeYears({
   currentYearUtilityCopHa,
   pendingRecoveryCopHa,
   referenceAgeYears,
-  discountRateEa,
 }: EquilibriumAgeInput) {
   const directAge = numericValue(breakEvenAgeYears)
   if (directAge !== null) return directAge
-
-  const capitalizedFlowAge = annualFlows ? capitalizedEquilibriumAgeFromAnnualFlows(annualFlows, discountRateEa) : null
-  if (capitalizedFlowAge !== null) return capitalizedFlowAge
 
   const flowAge = annualFlows ? equilibriumAgeFromAnnualFlows(annualFlows) : null
   if (flowAge !== null) return flowAge

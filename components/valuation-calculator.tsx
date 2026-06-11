@@ -78,7 +78,6 @@ function displayBreakEvenAge(
     currentAgeYears: appraisal.currentAgeYears,
     currentYearUtilityCopHa: appraisal.currentYearUtilityCopHa,
     pendingRecoveryCopHa: appraisal.pendingRecoveryCopHa,
-    discountRateEa: appraisal.discountRateEa,
     referenceAgeYears,
   })
 }
