@@ -7,8 +7,8 @@ import { Suspense } from "react"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Avalúos Agrícolas Profesionales",
-  description: "Avalúos Agrícolas Profesionales",
+  title: "Avalúos Agrícolas",
+  description: "Avalúos Agrícolas",
   icons: {
     icon: "/igac-logo.svg",
   },

@@ -17,17 +17,17 @@ export function HomePageClient() {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <div className="bg-gradient-to-br from-emerald-50 to-teal-50 min-h-[calc(100vh-3.5rem)]">
+      <div className="bg-linear-to-br from-emerald-50 to-teal-50 min-h-[calc(100vh-3.5rem)]">
         <div className="max-w-6xl mx-auto px-6 py-12 space-y-12">
           {/* Hero Section */}
           <div className="text-center space-y-6">
             <div className="flex justify-center mb-6">
               <Image src="/igac-logo.svg" alt="IGAC" width={56} height={80} className="h-20 w-auto" priority />
             </div>
-            <h2 className="text-4xl font-bold text-balance">Valuaciones Agrícolas Profesionales</h2>
+            <h2 className="text-4xl font-bold text-balance">Valuaciones Agrícolas</h2>
             <p className="text-xl text-muted-foreground text-pretty max-w-3xl mx-auto">
               Sistema completo para la valuación de propiedades agrícolas con análisis financiero avanzado, cálculos
-              automatizados de VPN e IRR, y reportes profesionales con niveles de confianza.
+              automatizados de VPN e IRR, y reportes con niveles de confianza.
             </p>
             <div className="flex justify-center gap-4 pt-4">
               <Button
@@ -84,7 +84,7 @@ export function HomePageClient() {
                     <FileTextIcon className="h-8 w-8 text-purple-600" />
                   </div>
                 </div>
-                <CardTitle className="text-xl">Reportes Profesionales</CardTitle>
+                <CardTitle className="text-xl">Reportes</CardTitle>
                 <CardDescription className="text-base">
                   Reportes detallados de valuación con niveles de confianza (A, B, C), trazabilidad de auditoría y
                   exportación en múltiples formatos.
@@ -136,7 +136,7 @@ export function HomePageClient() {
                   4
                 </div>
                 <h4 className="font-semibold">Reporte Final</h4>
-                <p className="text-sm text-muted-foreground">Obtenga reportes profesionales listos para presentar</p>
+                <p className="text-sm text-muted-foreground">Obtenga reportes listos para presentar</p>
               </div>
             </div>
           </div>
