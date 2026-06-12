@@ -217,6 +217,10 @@ function appraisedValueForRule(
   return currentYearUtilityCopHa
 }
 
+function startedProducingForStage(stageId: ProductionStageId, adjustedYieldKgHa: number) {
+  return stageId === "mantenimiento" && adjustedYieldKgHa > 0
+}
+
 export async function calculateCropAppraisal({
   supabase,
   cropId,
@@ -374,7 +378,7 @@ export async function calculateCropAppraisal({
   const currentFlow = annualFlows[currentFlowIndex]
   if (!currentFlow) throw new Error("No se encontró el año actual dentro de la curva de rendimiento.")
 
-  const startedProducing = currentFlow.adjustedYieldKgHa > 0
+  const startedProducing = startedProducingForStage(currentFlow.stageId, currentFlow.adjustedYieldKgHa)
   const currentYearSalvageCostCopHa = currentYearSalvageCostForPoint(
     flowPoints[currentFlowIndex],
     flowPoints[currentFlowIndex + 1],
@@ -544,6 +548,7 @@ export function recalculateCropAppraisalWithCostDeltas(
     currentFlow.stageId === "mantenimiento" && annualFlows[currentFlowIndex + 1]?.stageId !== "mantenimiento"
       ? stageCostTotalsCopHa.salvamento
       : 0
+  const startedProducing = startedProducingForStage(currentFlow.stageId, currentFlow.adjustedYieldKgHa)
   const cumulativeNetThroughCurrent = currentFlow.cumulativeNetFlowCopHa
   const vegetativeInvestmentCopHa = annualFlows
     .filter((flow) => flow.ageYears <= currentYear)
@@ -559,7 +564,7 @@ export function recalculateCropAppraisalWithCostDeltas(
   const appraisalRule: AppraisalRule =
     appraisal.stageId === "salvamento"
       ? "salvamento"
-      : !appraisal.startedProducing
+      : !startedProducing
         ? "vegetative"
         : breakEvenReached
           ? "post_equilibrium"
@@ -573,9 +578,9 @@ export function recalculateCropAppraisalWithCostDeltas(
     pendingRecoveryCopHa,
   )
   const vegetativeFinalValueCopHa = vegetativeInvestmentCopHa
-  const finalValueStage = appraisal.startedProducing ? "productive" : "vegetative"
+  const finalValueStage = startedProducing ? "productive" : "vegetative"
   const appraisedValueCopHa = Math.max(0, decisionTreeValueCopHa)
-  const productiveFinalValueCopHa = appraisal.startedProducing ? appraisedValueCopHa : 0
+  const productiveFinalValueCopHa = startedProducing ? appraisedValueCopHa : 0
   const appraisedValueCop = appraisedValueCopHa * appraisal.cropAreaHa
   const appraisedValueCopPerPlant =
     appraisal.densityPlantsHa !== null && appraisal.densityPlantsHa > 0
@@ -585,6 +590,7 @@ export function recalculateCropAppraisalWithCostDeltas(
   return {
     ...appraisal,
     appraisalRule,
+    startedProducing,
     breakEvenReached,
     breakEvenAgeYears: equilibriumAgeFromAnnualFlows(annualFlows),
     currentYearCostCopHa: currentFlow.costCopHa,
